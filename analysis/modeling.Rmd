@@ -38,10 +38,10 @@ train_set =  train_set %>%
 preprocess_recipe = recipe(target ~ ., data = train_set) %>% 
   step_zv()
   
-
 ```
 
 ```{r set_models_spec}
+
 
 lasso_model = linear_reg(penalty = tune(),mixture = 1) %>% 
   set_engine("glmnet")
@@ -74,8 +74,8 @@ lasso_fit = workflow() %>%
 ```{r evaluation}
 
 lasso_fit %>% 
-  finalize_workflow(lasso_fit %>% 
-                      select_best("rmse"))
+  collect_metrics()
+
 
 ```
 

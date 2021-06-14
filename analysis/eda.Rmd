@@ -1,0 +1,201 @@
+---
+title: "EDA"
+output: html_document
+---
+
+<style type="text/css">
+  body{
+  font-size: 16pt;
+}
+</style>
+
+```{r include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, error = FALSE, warning = FALSE,
+                      message = FALSE)
+
+```
+
+
+
+```{r load_libraries}
+
+devtools::load_all()
+
+library(tidyverse)
+
+library(corrr)
+
+library(ggcorrplot)
+
+library(glue)
+
+
+
+```
+
+```{r load_data}
+
+data(train_set)
+
+data(test_set)
+
+train_set = train_set %>% 
+  rename("id" = 1) %>% 
+  rename(target = "lnwage")
+
+test_set = test_set %>% 
+  rename("id" = 1)
+
+```
+
+```{r summarise_data, eval=FALSE}
+
+train_set %>% 
+  skimr::skim()
+
+```
+
+```{r convert_to factors}
+
+train_set = train_set %>% 
+  map_dfc(function(temp_col){
+    
+  if(length(unique(temp_col)) <= 2){
+    return(as.factor(temp_col))
+    }else {return(as.numeric(temp_col))}
+  })
+
+```
+
+The dataset have 38 features, most of them categorical binary features. There are `r sum(map_lgl(train_set, is.factor))` factor features and `r sum(map_lgl(train_set, is.numeric)) - 1` numeric features.
+
+### Outliers
+
+```{r outliers}
+
+train_set %>% 
+  select(where(is.numeric),-id,-target) %>% 
+  pivot_longer(everything()) %>% 
+  ggplot(aes(y = value)) + 
+  geom_boxplot() + 
+  facet_wrap(~name, scales = "free")
+
+```
+
+We can see that there are outliers in all the numeric features. Let's see what winsorizing can do, I use (0.05,0.8) bounds for (expfsq, exppsq) features and (0.05,0.8) for (edyrs, expf, expp).
+
+
+```{r outliers_winsorized}
+
+train_set %>% 
+  select(where(is.numeric),-id,-target) %>% 
+  mutate(across(ends_with("sq"),
+                ~ DescTools::Winsorize(.,probs = c(0.05,0.8)))) %>% 
+  mutate(across(c(expp,expf, edyrs),
+                ~ DescTools::Winsorize(.))) %>% 
+  pivot_longer(everything()) %>% 
+  ggplot(aes(y = value)) + 
+  geom_boxplot() + 
+  facet_wrap(~name, scales = "free") + 
+  xlab(NULL) + ylab(NULL)
+
+```
+
+
+## Numeric features
+
+The numeric features are : `r train_set %>% select(where(is.numeric)) %>% names() %>%  glue_collapse(sep = ",")`. When we look at the distribution of the
+features we can see that experience (and especially squared experience) is quite
+skewed with right tail outliers.There is a question of whether this is "a feature or a bug" since the squaring was introduced to catch the nonlinearity in experience. 
+
+```{r dist_of_numeric_features}
+
+train_set %>% 
+  select(where(is.numeric)) %>% 
+  pivot_longer(cols = -id) %>% 
+  ggplot(aes(x = value)) + 
+  geom_histogram() + 
+  facet_wrap(~name, scales = "free") + 
+  xlab(NULL) + ylab(NULL)
+  
+
+```
+
+When looking at the correlations of the numeric features with target we see that education and father experience are positively correlated with target (the square father experience has low correlation despite the fact that target has only positive values). The strange result is the negative correlation between experience (and its square) to target.
+
+```{r correlations_of_numeric_features}
+
+train_set %>% 
+  select(-id) %>% 
+  select(where(is.numeric)) %>% 
+  correlate() %>% 
+  stretch() %>% 
+  rename(feature = y) %>% 
+  filter(complete.cases(.)) %>% 
+  filter(x == "target") %>% 
+  ggplot(aes(x = reorder(feature,r), y = r)) + 
+  geom_col() + 
+  coord_flip() + 
+  xlab(NULL) + ylab(NULL) + 
+  ggtitle("Correlations of numeric features with target")
+
+```
+
+```{r scatterplot_of_numeric_features}
+
+train_set %>% 
+  select(where(is.numeric), target,-id) %>% 
+  pivot_longer(-target) %>% 
+  ggplot(aes(x = value, y = target)) + 
+  geom_point() + 
+  geom_smooth() + 
+  facet_wrap(~name, scales = "free") + 
+  xlab(NULL) + ylab(NULL) + ggtitle("Target distribution by numeric features")
+
+```
+
+The scatter plot emphases the outliers in some features so I apply a log transformation 
+
+```{r scatterplot_of_transformed_numeric_features}
+
+train_set %>% 
+  mutate(across(c(ends_with("sq"),expp), ~ log(.))) %>% 
+  select(where(is.numeric), target,-id) %>% 
+  pivot_longer(-target) %>% 
+  ggplot(aes(x = value, y = target)) + 
+  geom_point() + 
+  geom_smooth() + 
+  facet_wrap(~name, scales = "free") + 
+  xlab(NULL) + ylab(NULL) + 
+  ggtitle("Target distribution by transformed numeric features")
+
+```
+
+
+
+
+## Categorical features
+
+There are many features that are the results of one hot encoding of the categorical features. Perhaps try another encoding (embedding?).
+
+```{r boxplot_by_target, fig.height=7}
+
+train_set %>% 
+  select(where(is.factor), target) %>% 
+  pivot_longer(-target) %>% 
+  ggplot(aes(x = value, y = target)) + 
+  geom_boxplot() + 
+  facet_wrap(~name, scales = "free") + 
+  xlab(NULL) + ylab(NULL) + ggtitle("Target distribution by cat features")
+
+
+
+```
+
+We can see a difference in the following features: 
+
+
+
+
+

@@ -1,0 +1,81 @@
+---
+title: "Modeling"
+---
+<style type="text/css">
+  body{
+  font-size: 16pt;
+}
+</style>
+
+```{r include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, error = FALSE, warning = FALSE,
+                      message = FALSE)
+
+```
+
+```{r load_libraries}
+
+library(tidyverse)
+
+library(tidymodels)
+
+```
+
+```{r load_data}
+
+data("train_set")
+
+train_set =  train_set %>% 
+  rename("id" = 1) %>% 
+  rename("target" = lnwage)
+
+
+```
+
+```{r preprocessing}
+
+preprocess_recipe = recipe(target ~ ., data = train_set) %>% 
+  step_zv()
+  
+
+```
+
+```{r set_models_spec}
+
+lasso_model = linear_reg(penalty = tune(),mixture = 1) %>% 
+  set_engine("glmnet")
+  
+
+
+
+```
+
+```{r set_cross_validation}
+
+cv_folds = train_set %>% 
+  vfold_cv(v = 10)
+
+param_grid = grid_regular(penalty(),levels = 10)
+
+```
+
+
+
+```{r fit_models}
+
+lasso_fit = workflow() %>% 
+  add_recipe(preprocess_recipe) %>% 
+  add_model(lasso_model) %>%
+  tune_grid(resamples = cv_folds, grid = param_grid)
+
+```
+
+```{r evaluation}
+
+lasso_fit %>% 
+  finalize_workflow(lasso_fit %>% 
+                      select_best("rmse"))
+
+```
+

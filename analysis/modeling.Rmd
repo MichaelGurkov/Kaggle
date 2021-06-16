@@ -36,22 +36,23 @@ train_set =  train_set %>%
 ```{r preprocessing}
 
 preprocess_recipe = recipe(target ~ ., data = train_set) %>% 
-  step_zv()
+  step_zv(all_nominal(), all_numeric())
   
 ```
 
 ```{r set_models_spec}
 
-
-lasso_model = linear_reg(penalty = tune(),mixture = 1) %>% 
-  set_engine("glmnet")
+lasso_model = workflow() %>% 
+  add_recipe(preprocess_recipe) %>% 
+  add_model(linear_reg(penalty = tune(),mixture = 1) %>% 
+  set_engine("glmnet"))
   
 
 
 
 ```
 
-```{r set_cross_validation}
+```{r set_cross_validation_and_tuning}
 
 cv_folds = train_set %>% 
   vfold_cv(v = 10)
@@ -60,21 +61,18 @@ param_grid = grid_regular(penalty(),levels = 10)
 
 ```
 
+```{r tune_models}
 
-
-```{r fit_models}
-
-lasso_fit = workflow() %>% 
-  add_recipe(preprocess_recipe) %>% 
-  add_model(lasso_model) %>%
-  tune_grid(resamples = cv_folds, grid = param_grid)
+lasso_tune =  lasso_model %>%
+  tune_grid(resamples = cv_folds,
+            grid = param_grid,
+            metrics = metric_set(rmse))
 
 ```
 
 ```{r evaluation}
 
-lasso_fit %>% 
-  collect_metrics()
+
 
 
 ```

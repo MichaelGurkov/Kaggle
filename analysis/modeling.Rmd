@@ -20,6 +20,8 @@ library(tidyverse)
 
 library(tidymodels)
 
+library(baguette)
+
 ```
 
 ```{r load_data}
@@ -27,16 +29,18 @@ library(tidymodels)
 data("train_set")
 
 train_set =  train_set %>% 
-  rename("id" = 1) %>% 
+  rename("ID" = 1) %>% 
   rename("target" = lnwage)
 
+data("test_set")
 
 ```
 
 ```{r preprocessing}
 
 preprocess_recipe = recipe(target ~ ., data = train_set) %>% 
-  step_zv(all_nominal(), all_numeric())
+  update_role(ID,new_role = "id variable") %>% 
+  step_zv(all_predictors())
   
 ```
 
@@ -46,7 +50,21 @@ lasso_model = workflow() %>%
   add_recipe(preprocess_recipe) %>% 
   add_model(linear_reg(penalty = tune(),mixture = 1) %>% 
   set_engine("glmnet"))
-  
+
+# rf_model = workflow() %>% 
+#   add_recipe(preprocess_recipe) %>% 
+#   add_model(rand_forest(trees = 1000) %>%
+#   set_mode("regression") %>%
+#   set_engine("ranger"))
+# 
+# 
+# bag_tree_model = workflow() %>% 
+#   add_recipe(preprocess_recipe) %>% 
+#   add_model(bag_tree() %>% 
+#   set_engine("rpart", times = 25) %>%
+#   set_mode("regression"))
+
+ 
 
 
 
@@ -68,11 +86,40 @@ lasso_tune =  lasso_model %>%
             grid = param_grid,
             metrics = metric_set(rmse))
 
+# rf_fit = rf_model %>% 
+#   fit_resamples(cv_folds, data = train_set)
+
 ```
 
-```{r evaluation}
+```{r evaluate_models}
+
+lasso_eval = lasso_tune %>% 
+              show_best() %>% 
+              slice(1) %>% 
+              select(-c(".config","penalty")) %>% 
+              mutate(model = "lasso")
+
+# rf_eval = rf_fit %>% 
+#   collect_metrics() %>% 
+#   filter(.metric == "rmse") %>% 
+#   mutate(model = "rf") %>% 
+#   select(-".config")
 
 
+
+
+```
+
+```{r last_fit_and_predict}
+
+lasso_fit = lasso_model %>% 
+  finalize_workflow(parameters = select_best(lasso_tune)) %>% 
+  fit(train_set)
+
+
+lasso_pred = test_set %>%
+  select(ID) %>%
+  bind_cols(predict(lasso_fit, test_set))
 
 
 ```

@@ -193,7 +193,9 @@ train_set %>%
 
 ```
 
-We can see a difference in the following features: 
+# Summary
+* Reduce variance by winsorizing
+* Reverse OHE and try embeddings
 
 
 

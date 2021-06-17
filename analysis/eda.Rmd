@@ -49,6 +49,37 @@ test_set = test_set %>%
 
 ```
 
+```{r set_params}
+
+professions = c(
+  "manager",
+  "business",
+  "financialop",
+  "computer",
+  "architect",
+  "scientist",
+  "socialworker",
+  "postseceduc",
+  "legaleduc",
+  "artist",
+  "lawyerphysician",
+  "healthcare",
+  "healthsupport",
+  "protective",
+  "foodcare",
+  "building",
+  "sales",
+  "officeadmin",
+  "farmer",
+  "constructextractinstall",
+  "production",
+  "transport"
+)
+
+
+```
+
+
 ```{r summarise_data, eval=FALSE}
 
 train_set %>% 

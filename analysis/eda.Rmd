@@ -119,17 +119,34 @@ We can see that there are outliers in all the numeric features. Let's see what w
 
 ```{r outliers_winsorized}
 
-train_set %>% 
-  select(where(is.numeric),-id,-target) %>% 
-  mutate(across(ends_with("sq"),
+# train_set %>% 
+#   select(where(is.numeric),-id,-target) %>% 
+#   mutate(across(ends_with("sq"),
+#                 ~ DescTools::Winsorize(.,probs = c(0.05,0.8)))) %>% 
+#   mutate(across(c(expp,expf, edyrs),
+#                 ~ DescTools::Winsorize(.))) %>% 
+#   pivot_longer(everything()) %>% 
+#   ggplot(aes(y = value)) + 
+#   geom_boxplot() + 
+#   facet_wrap(~name, scales = "free") + 
+#   xlab(NULL) + ylab(NULL)
+
+
+train_set = train_set %>% 
+  mutate(across(c(exppsq,expfsq),
                 ~ DescTools::Winsorize(.,probs = c(0.05,0.8)))) %>% 
   mutate(across(c(expp,expf, edyrs),
-                ~ DescTools::Winsorize(.))) %>% 
+                ~ DescTools::Winsorize(.)))
+
+train_set %>% 
+  select(where(is.numeric),-id,-target) %>% 
   pivot_longer(everything()) %>% 
   ggplot(aes(y = value)) + 
   geom_boxplot() + 
   facet_wrap(~name, scales = "free") + 
   xlab(NULL) + ylab(NULL)
+
+
 
 ```
 
@@ -180,30 +197,11 @@ train_set %>%
   pivot_longer(-target) %>% 
   ggplot(aes(x = value, y = target)) + 
   geom_point() + 
-  geom_smooth() + 
+  geom_smooth(method = "glm") + 
   facet_wrap(~name, scales = "free") + 
   xlab(NULL) + ylab(NULL) + ggtitle("Target distribution by numeric features")
 
 ```
-
-The scatter plot emphases the outliers in some features so I apply a log transformation 
-
-```{r scatterplot_of_transformed_numeric_features}
-
-train_set %>% 
-  mutate(across(c(ends_with("sq"),expp), ~ log(.))) %>% 
-  select(where(is.numeric), target,-id) %>% 
-  pivot_longer(-target) %>% 
-  ggplot(aes(x = value, y = target)) + 
-  geom_point() + 
-  geom_smooth() + 
-  facet_wrap(~name, scales = "free") + 
-  xlab(NULL) + ylab(NULL) + 
-  ggtitle("Target distribution by transformed numeric features")
-
-```
-
-
 
 
 ## Categorical features
@@ -224,9 +222,37 @@ train_set %>%
 
 ```
 
+let's see what are the mean values of target by profession, in general the data looks good (computer, business and finance making more than social worker and building) but there are "outliers" such as artist (at the top) or scientist (at the middle).Checking out the distribution of target by profession we can see that
+there is one rich artist that stands out. One way of dealing with it is to try
+to encode with median target by profession
+
+
+```{r average_target_by_profession}
+
+train_set = train_set %>% 
+  pivot_longer(cols = all_of(professions),names_to = "profession") %>% 
+  filter(value == 1) %>% 
+  select(-value)
+
+
+train_set %>% 
+  select(target, profession) %>% 
+  group_by(profession) %>% 
+  summarise(mean_target = mean(target), .groups = "drop") %>% 
+  ggplot(aes(x = reorder(profession,mean_target), y = mean_target)) + 
+  geom_col() + 
+  coord_flip() + 
+  xlab(NULL) + ylab(NULL) + ggtitle("Average target by profession")
+  
+
+
+
+```
+
+
 # Summary
-* Reduce variance by winsorizing
-* Reverse OHE and try embeddings
+* Reduce variance by winsorizing (expfsq, exppsq,edyrs, expf, expp)
+* Reverse OHE in profession and try embeddings (median target)
 
 
 

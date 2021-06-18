@@ -22,6 +22,8 @@ library(tidymodels)
 
 library(embed)
 
+library(workflowsets)
+
 ```
 
 ```{r parameters}
@@ -76,17 +78,20 @@ test_set = test_set %>%
 
 dummy_recipe = recipe(lnwage ~ ., data = train_set) %>% 
   update_role(ID,new_role = "id variable") %>% 
-  step_dummy(all_of(professions))
+  step_spatialsign(c("exppsq","expfsq","expp","expf", "edyrs")) %>% 
+  step_dummy(profession)
 
 encode_recipe = recipe(lnwage ~ ., data = train_set) %>% 
   update_role(ID,new_role = "id variable") %>% 
+  step_spatialsign(c("exppsq","expfsq","expp","expf", "edyrs")) %>% 
   step_lencode_glm(profession,outcome = "lnwage")
   
 ```
 
 ```{r set_models_spec}
 
-
+linear_model = linear_reg() %>% 
+  set_engine("lm")
  
 
 
@@ -98,6 +103,16 @@ encode_recipe = recipe(lnwage ~ ., data = train_set) %>%
 cv_folds = train_set %>% 
   vfold_cv(v = 10)
 
+
+```
+
+```{r estimation}
+
+models_set = workflow_set(
+  preproc = list(ohe = dummy_recipe, encode = encode_recipe),
+  models = list(linear = linear_model))
+
+temp = fit(models_set$info[[1]]$workflow[[1]], train_set)
 
 ```
 

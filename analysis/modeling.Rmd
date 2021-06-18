@@ -20,7 +20,38 @@ library(tidyverse)
 
 library(tidymodels)
 
-library(baguette)
+library(embed)
+
+library(workflowsets)
+
+```
+
+```{r parameters}
+
+professions = c(
+  "manager",
+  "business",
+  "financialop",
+  "computer",
+  "architect",
+  "scientist",
+  "socialworker",
+  "postseceduc",
+  "legaleduc",
+  "artist",
+  "lawyerphysician",
+  "healthcare",
+  "healthsupport",
+  "protective",
+  "foodcare",
+  "building",
+  "sales",
+  "officeadmin",
+  "farmer",
+  "constructextractinstall",
+  "production",
+  "transport"
+)
 
 ```
 
@@ -29,42 +60,50 @@ library(baguette)
 data("train_set")
 
 train_set =  train_set %>% 
-  rename("ID" = 1) %>% 
-  rename("target" = lnwage)
+  rename(ID = 1) %>% 
+  pivot_longer(cols = all_of(professions),names_to = "profession") %>% 
+  filter(value == 1) %>% 
+  select(-value)
 
 data("test_set")
+
+test_set = test_set %>% 
+  pivot_longer(cols = all_of(professions),names_to = "profession") %>% 
+  filter(value == 1) %>% 
+  select(-value)
 
 ```
 
 ```{r preprocessing}
 
-preprocess_recipe = recipe(target ~ ., data = train_set) %>% 
+dummy_recipe = recipe(lnwage ~ ., data = train_set) %>% 
   update_role(ID,new_role = "id variable") %>% 
-  step_zv(all_predictors())
+  step_YeoJohnson(c("exppsq","expfsq")) %>% 
+  step_dummy(profession) %>% 
+  step_normalize(all_numeric(),all_numeric(), -all_outcomes())
+
+encode_recipe = recipe(lnwage ~ ., data = train_set) %>% 
+  update_role(ID,new_role = "id variable") %>% 
+  step_YeoJohnson(c("exppsq","expfsq")) %>% 
+  step_lencode_glm(profession,outcome = vars(lnwage)) %>% 
+  step_normalize(all_numeric(),all_numeric(), -all_outcomes())
+
+interaction_rec = encode_recipe %>% 
+  step_interact(~profession:edyrs) %>% 
+  step_normalize(all_numeric(),all_numeric(), -all_outcomes())
   
 ```
 
 ```{r set_models_spec}
 
-lasso_model = workflow() %>% 
-  add_recipe(preprocess_recipe) %>% 
-  add_model(linear_reg(penalty = tune(),mixture = 1) %>% 
-  set_engine("glmnet"))
+rf_model = rand_forest(trees = 1000) %>% 
+  set_mode("regression") %>% 
+  set_engine("ranger")
+  
 
-# rf_model = workflow() %>% 
-#   add_recipe(preprocess_recipe) %>% 
-#   add_model(rand_forest(trees = 1000) %>%
-#   set_mode("regression") %>%
-#   set_engine("ranger"))
-# 
-# 
-# bag_tree_model = workflow() %>% 
-#   add_recipe(preprocess_recipe) %>% 
-#   add_model(bag_tree() %>% 
-#   set_engine("rpart", times = 25) %>%
-#   set_mode("regression"))
+lasso_model = linear_reg(penalty = tune(), mixture = 1) %>% 
+  set_engine("glmnet")
 
- 
 
 
 
@@ -73,53 +112,61 @@ lasso_model = workflow() %>%
 ```{r set_cross_validation_and_tuning}
 
 cv_folds = train_set %>% 
-  vfold_cv(v = 10)
+  vfold_cv(v = 10, repeats = 3)
 
-param_grid = grid_regular(penalty(),levels = 10)
-
-```
-
-```{r tune_models}
-
-lasso_tune =  lasso_model %>%
-  tune_grid(resamples = cv_folds,
-            grid = param_grid,
-            metrics = metric_set(rmse))
-
-# rf_fit = rf_model %>% 
-#   fit_resamples(cv_folds, data = train_set)
 
 ```
 
-```{r evaluate_models}
+```{r estimation}
 
-lasso_eval = lasso_tune %>% 
-              show_best() %>% 
-              slice(1) %>% 
-              select(-c(".config","penalty")) %>% 
-              mutate(model = "lasso")
+models_set = workflow_set(
+  preproc = list(
+    encode = encode_recipe,
+    interact = interaction_rec
+  ),
+  models = list(rf = rf_model, lasso = lasso_model)
+)
 
-# rf_eval = rf_fit %>% 
-#   collect_metrics() %>% 
-#   filter(.metric == "rmse") %>% 
-#   mutate(model = "rf") %>% 
-#   select(-".config")
+resample_res = models_set %>% 
+  workflow_map(fn = "tune_grid",seed = 1101, resamples = cv_folds,
+               grid = 10)
 
 
 
 
 ```
 
-```{r last_fit_and_predict}
+```{r evaluation}
 
-lasso_fit = lasso_model %>% 
-  finalize_workflow(parameters = select_best(lasso_tune)) %>% 
+resample_res %>% 
+  collect_metrics() %>% 
+  filter(.metric == "rmse") %>% 
+  group_by(wflow_id) %>% 
+  slice_min(2) %>% 
+  select(wflow_id, mean,std_err) %>% 
+  mutate(mse = mean ^ 2)
+
+```
+
+```{r prediction, eval=FALSE}
+
+lasso_tune = workflow() %>% 
+  add_recipe(encode_recipe) %>% 
+  add_model(lasso_model) %>% 
+  tune_grid(resamples = cv_folds, grid = 15)
+
+lasso_fit = workflow() %>% 
+  add_recipe(encode_recipe) %>% 
+  add_model(lasso_model) %>% 
+  finalize_workflow(select_best(lasso_tune,metric = "rmse")) %>% 
   fit(train_set)
 
-
-lasso_pred = test_set %>%
-  select(ID) %>%
-  bind_cols(predict(lasso_fit, test_set))
+lasso_fit %>% 
+  predict(test_set) %>% 
+  rename(lnwage = 1) %>% 
+  bind_cols(select(test_set,ID)) %>% 
+  relocate(ID) %>% 
+  write_csv("C:\\Users\\Home\\Desktop\\test_submission.csv")
 
 
 ```

@@ -24,11 +24,15 @@ devtools::load_all()
 
 library(tidyverse)
 
+library(tidymodels)
+
 library(corrr)
 
 library(ggcorrplot)
 
 library(glue)
+
+library(ggmosaic)
 
 
 
@@ -38,16 +42,49 @@ library(glue)
 
 data(train_set)
 
-data(test_set)
+
 
 train_set = train_set %>% 
   rename("id" = 1) %>% 
   rename(target = "lnwage")
 
-test_set = test_set %>% 
-  rename("id" = 1)
+# data(test_set)
+# 
+# test_set = test_set %>% 
+#   rename("id" = 1)
 
 ```
+
+```{r set_params}
+
+professions = c(
+  "manager",
+  "business",
+  "financialop",
+  "computer",
+  "architect",
+  "scientist",
+  "socialworker",
+  "postseceduc",
+  "legaleduc",
+  "artist",
+  "lawyerphysician",
+  "healthcare",
+  "healthsupport",
+  "protective",
+  "foodcare",
+  "building",
+  "sales",
+  "officeadmin",
+  "farmer",
+  "constructextractinstall",
+  "production",
+  "transport"
+)
+
+
+```
+
 
 ```{r summarise_data, eval=FALSE}
 
@@ -83,22 +120,30 @@ train_set %>%
 
 ```
 
-We can see that there are outliers in all the numeric features. Let's see what winsorizing can do, I use (0.05,0.8) bounds for (expfsq, exppsq) features and (0.05,0.8) for (edyrs, expf, expp).
+We can see that there are outliers in all the numeric features.
+For the squared features I'll try the Yeo-Johnson transformation to deal
+with skewness.
 
+```{r yeo_johnson_transformation}
 
-```{r outliers_winsorized}
+test_recipe = recipe(target ~ ., train_set) %>% 
+  step_YeoJohnson(ends_with("sq")) %>%
+  identity()
+
+train_set = test_recipe %>% 
+  prep() %>% 
+  bake(train_set)
+
 
 train_set %>% 
-  select(where(is.numeric),-id,-target) %>% 
-  mutate(across(ends_with("sq"),
-                ~ DescTools::Winsorize(.,probs = c(0.05,0.8)))) %>% 
-  mutate(across(c(expp,expf, edyrs),
-                ~ DescTools::Winsorize(.))) %>% 
+  select(ends_with("sq")) %>% 
   pivot_longer(everything()) %>% 
   ggplot(aes(y = value)) + 
   geom_boxplot() + 
-  facet_wrap(~name, scales = "free") + 
-  xlab(NULL) + ylab(NULL)
+  facet_wrap(~name, scales = "free")
+
+
+rm(test_recipe)
 
 ```
 
@@ -149,35 +194,31 @@ train_set %>%
   pivot_longer(-target) %>% 
   ggplot(aes(x = value, y = target)) + 
   geom_point() + 
-  geom_smooth() + 
+  geom_smooth(method = "glm") + 
   facet_wrap(~name, scales = "free") + 
   xlab(NULL) + ylab(NULL) + ggtitle("Target distribution by numeric features")
 
 ```
 
-The scatter plot emphases the outliers in some features so I apply a log transformation 
+Does experience and education years (after 18 years old)sum up to age?
 
-```{r scatterplot_of_transformed_numeric_features}
+
+```{r age_distribution}
 
 train_set %>% 
-  mutate(across(c(ends_with("sq"),expp), ~ log(.))) %>% 
-  select(where(is.numeric), target,-id) %>% 
-  pivot_longer(-target) %>% 
-  ggplot(aes(x = value, y = target)) + 
-  geom_point() + 
-  geom_smooth() + 
-  facet_wrap(~name, scales = "free") + 
-  xlab(NULL) + ylab(NULL) + 
-  ggtitle("Target distribution by transformed numeric features")
+  mutate(age = expp + edyrs + 18) %>% 
+  ggplot(aes(x = age)) + 
+  geom_histogram() + 
+  xlab(NULL) + ylab(NULL) + ggtitle("Age (expp + edyrs + 18) distribution")
 
 ```
 
 
-
-
 ## Categorical features
 
-There are many features that are the results of one hot encoding of the categorical features. Perhaps try another encoding (embedding?).
+There are many features that are the results of one hot encoding of the categorical features. Perhaps we can try another encoding and so I collect back the categories to
+one categorical variable
+
 
 ```{r boxplot_by_target, fig.height=7}
 
@@ -193,9 +234,58 @@ train_set %>%
 
 ```
 
+
+```{r inverse_ohe}
+
+train_set = train_set %>% 
+  pivot_longer(cols = all_of(professions),names_to = "profession") %>% 
+  filter(value == 1) %>% 
+  select(-value)
+
+```
+
+
+Let's see what are the mean values of target by profession, in general the data looks good (computer, business and finance making more than social worker and building) but there are "outliers" such as artist (at the top) or scientist (at the middle).Checking out the distribution of target by profession we can see that
+there is one rich artist that stands out. One way of dealing with it is to try
+to encode with median target by profession
+
+
+```{r average_target_by_profession}
+
+
+train_set %>% 
+  select(target, profession) %>% 
+  group_by(profession) %>% 
+  summarise(mean_target = mean(target), .groups = "drop") %>% 
+  ggplot(aes(x = reorder(profession,mean_target), y = mean_target)) + 
+  geom_col() + 
+  coord_flip() + 
+  xlab(NULL) + ylab(NULL) + ggtitle("Average target by profession")
+  
+
+
+
+```
+
+```{r profession_distribution}
+
+train_set %>% 
+  count(profession) %>% 
+  ggplot(aes(x = reorder(profession,n), y = n)) + 
+  geom_col() + 
+  coord_flip() + 
+  xlab(NULL) + ylab(NULL) + ggtitle("Profession distribution")
+  
+
+```
+
+We can see that some professions are relatively rare so we may try to drop
+them all in one category (other)
+
+
 # Summary
-* Reduce variance by winsorizing
-* Reverse OHE and try embeddings
+* Reduce skewness by Yeo-Johnson (expfsq, exppsq)
+* Reverse OHE in profession and try (target) embeddings
 
 
 

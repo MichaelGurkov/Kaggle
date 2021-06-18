@@ -24,6 +24,8 @@ devtools::load_all()
 
 library(tidyverse)
 
+library(tidymodels)
+
 library(corrr)
 
 library(ggcorrplot)
@@ -114,7 +116,38 @@ train_set %>%
 
 ```
 
-We can see that there are outliers in all the numeric features. Let's see what winsorizing can do, I use (0.05,0.8) bounds for (expfsq, exppsq) features and (0.05,0.8) for (edyrs, expf, expp).
+We can see that there are outliers in all the numeric features. 
+
+```{r spatial_sign_transformation}
+
+test_recipe = recipe(target ~ ., train_set) %>% 
+  step_YeoJohnson(ends_with("sq")) %>%
+  identity()
+
+temp_data = test_recipe %>% 
+  prep() %>% 
+  bake(train_set)
+
+
+
+# rain_set %>% 
+#   select(ends_with("sq")) %>% 
+#   pivot_longer(everything()) %>% 
+#   ggplot(aes(y = value)) + 
+#   geom_boxplot() + 
+#   facet_wrap(~name, scales = "free")
+
+temp_data %>% 
+  select(ends_with("sq")) %>% 
+  pivot_longer(everything()) %>% 
+  ggplot(aes(y = value)) + 
+  geom_boxplot() + 
+  facet_wrap(~name, scales = "free")
+
+
+```
+
+Let's see what winsorizing can do, I use (0.05,0.8) bounds for (expfsq, exppsq) features and (0.05,0.8) for (edyrs, expf, expp).
 
 
 ```{r outliers_winsorized}

@@ -78,12 +78,12 @@ test_set = test_set %>%
 
 dummy_recipe = recipe(lnwage ~ ., data = train_set) %>% 
   update_role(ID,new_role = "id variable") %>% 
-  step_spatialsign(c("exppsq","expfsq")) %>% 
+  step_YeoJohnson(c("exppsq","expfsq")) %>% 
   step_dummy(profession)
 
 encode_recipe = recipe(lnwage ~ ., data = train_set) %>% 
   update_role(ID,new_role = "id variable") %>% 
-  step_spatialsign(c("exppsq","expfsq")) %>% 
+  step_YeoJohnson(c("exppsq","expfsq")) %>% 
   step_lencode_glm(profession,outcome = "lnwage")
 
 interaction_rec = encode_recipe %>% 
@@ -93,8 +93,10 @@ interaction_rec = encode_recipe %>%
 
 ```{r set_models_spec}
 
-linear_model = linear_reg() %>% 
-  set_engine("lm")
+rf_model = rand_forest(trees = 1000) %>% 
+  set_mode("regression") %>% 
+  set_engine("ranger")
+  
 
 lasso_model = linear_reg(penalty = tune(), mixture = 1) %>% 
   set_engine("glmnet")
@@ -116,11 +118,10 @@ cv_folds = train_set %>%
 
 models_set = workflow_set(
   preproc = list(
-    ohe = dummy_recipe,
     encode = encode_recipe,
     interact = interaction_rec
   ),
-  models = list(linear = linear_model, lasso = lasso_model)
+  models = list(rf = rf_model, lasso = lasso_model)
 )
 
 resample_res = models_set %>% 
@@ -141,6 +142,29 @@ resample_res %>%
   slice_min(2) %>% 
   select(wflow_id, mean,std_err) %>% 
   mutate(mse = mean ^ 2)
+
+```
+
+```{r prediction}
+
+lasso_tune = workflow() %>% 
+  add_recipe(encode_recipe) %>% 
+  add_model(lasso_model) %>% 
+  tune_grid(resamples = cv_folds, grid = 15)
+
+lasso_fit = workflow() %>% 
+  add_recipe(encode_recipe) %>% 
+  add_model(lasso_model) %>% 
+  finalize_workflow(select_best(lasso_tune,metric = "rmse")) %>% 
+  fit(train_set)
+
+lasso_fit %>% 
+  predict(test_set) %>% 
+  rename(lnwage = 1) %>% 
+  bind_cols(select(test_set,ID)) %>% 
+  relocate(ID) %>% 
+  write_csv("C:\\Users\\Home\\Desktop\\test_submission.csv")
+
 
 ```
 

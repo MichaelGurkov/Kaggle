@@ -78,13 +78,16 @@ test_set = test_set %>%
 
 dummy_recipe = recipe(lnwage ~ ., data = train_set) %>% 
   update_role(ID,new_role = "id variable") %>% 
-  step_spatialsign(c("exppsq","expfsq","expp","expf", "edyrs")) %>% 
+  step_spatialsign(c("exppsq","expfsq")) %>% 
   step_dummy(profession)
 
 encode_recipe = recipe(lnwage ~ ., data = train_set) %>% 
   update_role(ID,new_role = "id variable") %>% 
-  step_spatialsign(c("exppsq","expfsq","expp","expf", "edyrs")) %>% 
+  step_spatialsign(c("exppsq","expfsq")) %>% 
   step_lencode_glm(profession,outcome = "lnwage")
+
+interaction_rec = encode_recipe %>% 
+  step_interact(~profession:edyrs)
   
 ```
 
@@ -92,7 +95,10 @@ encode_recipe = recipe(lnwage ~ ., data = train_set) %>%
 
 linear_model = linear_reg() %>% 
   set_engine("lm")
- 
+
+lasso_model = linear_reg(penalty = tune(), mixture = 1) %>% 
+  set_engine("glmnet")
+
 
 
 
@@ -101,7 +107,7 @@ linear_model = linear_reg() %>%
 ```{r set_cross_validation_and_tuning}
 
 cv_folds = train_set %>% 
-  vfold_cv(v = 10)
+  vfold_cv(v = 10, repeats = 3)
 
 
 ```
@@ -109,10 +115,32 @@ cv_folds = train_set %>%
 ```{r estimation}
 
 models_set = workflow_set(
-  preproc = list(ohe = dummy_recipe, encode = encode_recipe),
-  models = list(linear = linear_model))
+  preproc = list(
+    ohe = dummy_recipe,
+    encode = encode_recipe,
+    interact = interaction_rec
+  ),
+  models = list(linear = linear_model, lasso = lasso_model)
+)
 
-temp = fit(models_set$info[[1]]$workflow[[1]], train_set)
+resample_res = models_set %>% 
+  workflow_map(fn = "tune_grid",seed = 1101, resamples = cv_folds,
+               grid = 10)
+
+
+
+
+```
+
+```{r evaluation}
+
+resample_res %>% 
+  collect_metrics() %>% 
+  filter(.metric == "rmse") %>% 
+  group_by(wflow_id) %>% 
+  slice_min(2) %>% 
+  select(wflow_id, mean,std_err) %>% 
+  mutate(mse = mean ^ 2)
 
 ```
 

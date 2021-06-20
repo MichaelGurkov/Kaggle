@@ -20,6 +20,8 @@ library(tidyverse)
 
 library(tidymodels)
 
+library(baguette)
+
 library(embed)
 
 library(workflowsets)
@@ -117,10 +119,12 @@ basic_recipe = recipe(lnwage ~ ., data = train_set_transformed) %>%
   step_normalize(all_numeric(), -all_outcomes())
 
 dummy_recipe = basic_recipe %>% 
-  step_dummy(c(profession, race, area)) 
+  step_dummy(c(profession, race, area)) %>% 
+  step_interact(~edyrs:starts_with("race"))
 
 encode_recipe = basic_recipe %>%
-  step_lencode_glm(c(profession, race, area),outcome = vars(lnwage))
+  step_lencode_glm(c(profession, race, area),outcome = vars(lnwage)) %>% 
+  step_interact(~edyrs:race)
 
 
 ```
@@ -133,9 +137,23 @@ linear_model = linear_reg() %>%
 lasso_model = linear_reg(penalty = tune(), mixture = 1) %>% 
   set_engine("glmnet")
 
-rf_model = rand_forest(trees = 1000) %>% 
-  set_mode("regression") %>% 
-  set_engine("ranger")
+cart_model = decision_tree(cost_complexity = tune(), min_n = tune()) %>% 
+   set_engine("rpart") %>% 
+   set_mode("regression")
+
+bag_cart_model = bag_tree() %>% 
+   set_engine("rpart", times = 50L) %>% 
+   set_mode("regression")
+
+rf_model = rand_forest(mtry = tune(), min_n = tune(), trees = 1000) %>% 
+   set_engine("ranger") %>% 
+   set_mode("regression")
+
+xgb_model = boost_tree(tree_depth = tune(), learn_rate = tune(),
+                       loss_reduction = tune(), 
+                       min_n = tune(), sample_size = tune(), trees = tune()) %>% 
+   set_engine("xgboost") %>% 
+   set_mode("regression")
 
 
 ```
@@ -154,7 +172,7 @@ workflow() %>%
 ```{r set_cross_validation_and_tuning}
 
 cv_folds = train_set_transformed %>% 
-  vfold_cv(v = 10,repeats = 3)
+  vfold_cv(v = 10,repeats = 5)
 
 
 ```
@@ -165,12 +183,19 @@ models_set = workflow_set(
   preproc = list(dummy = dummy_recipe,
                  encode = encode_recipe),
   models = list(linear = linear_model,
-                lasso = lasso_model)
+                lasso = lasso_model,
+                tree = cart_model,
+                bag_tree = bag_cart_model,
+                xgb = xgb_model)
 )
 
-resample_res = models_set %>% 
-  workflow_map(fn = "tune_grid",seed = 1101, resamples = cv_folds,
-               grid = 10)
+resample_res = models_set %>%
+  workflow_map(
+    fn = "tune_grid",
+    resamples = cv_folds,
+    grid = 25,
+    control = control_grid(parallel_over = "everything")
+  )
 
 
 

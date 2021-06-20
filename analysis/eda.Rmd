@@ -107,7 +107,7 @@ preprocess_recipe = recipe(lnwage ~ ., train_set_transformed)
 
 ```
 
-### Outliers
+## Outliers
 
 ```{r outliers}
 
@@ -124,10 +124,12 @@ We can see that there are outliers in all the numeric features.
 For the squared features I'll try the Yeo-Johnson transformation to deal
 with skewness.
 
+
+
 ```{r yeo_johnson_transformation}
 
 preprocess_recipe = preprocess_recipe %>%
-  step_YeoJohnson(ends_with("sq"))
+  step_BoxCox(ends_with("sq"))
 
 train_set_baked = preprocess_recipe %>% 
   prep() %>% 
@@ -185,6 +187,31 @@ train_set_baked %>%
 
 ```
 
+Does experience and education years (after 18 years old)sum up to age? Need to think about whether add age as another feature?
+
+
+```{r age_distribution}
+
+train_set_baked %>% 
+  mutate(age = expp + edyrs + 18) %>% 
+  ggplot(aes(x = age)) + 
+  geom_histogram() + 
+  xlab(NULL) + ylab(NULL) + ggtitle("Age (expp + edyrs + 18) distribution")
+
+```
+
+```{r add_age}
+
+preprocess_recipe = preprocess_recipe %>% 
+  step_mutate(age = expp + edyrs + 18)
+
+train_set_baked = preprocess_recipe %>% 
+  prep() %>% 
+  bake(train_set_transformed)
+
+```
+
+
 ```{r scatterplot_of_numeric_features}
 
 train_set_baked %>% 
@@ -196,19 +223,6 @@ train_set_baked %>%
   facet_wrap(~name, scales = "free") + 
   xlab(NULL) + ylab(NULL) + 
   ggtitle("Scaterrplot of lnwage and numeric features")
-
-```
-
-Does experience and education years (after 18 years old)sum up to age? Need to think about whether add age as another feature?
-
-
-```{r age_distribution}
-
-train_set_baked %>% 
-  mutate(age = expp + edyrs + 18) %>% 
-  ggplot(aes(x = age)) + 
-  geom_histogram() + 
-  xlab(NULL) + ylab(NULL) + ggtitle("Age (expp + edyrs + 18) distribution")
 
 ```
 
@@ -353,6 +367,40 @@ train_set_baked %>%
   labs(fill = "Rare race (less than 5%)") + 
   xlab(NULL) + ylab(NULL) + ggtitle("Race distribution")
   
+
+```
+
+
+##Interactions
+
+```{r}
+
+train_set_transformed %>% 
+  ggplot(aes(x = edyrs, y = lnwage, color = race)) + 
+  geom_smooth(method = "lm", se = FALSE)
+
+```
+
+
+```{r add_interaction_between_edyrs_and_race}
+
+preprocess_recipe = preprocess_recipe %>% 
+  step_dummy(race) %>% 
+  step_interact(~edyrs:starts_with("race"))
+
+train_set_baked = preprocess_recipe %>% 
+  prep() %>% 
+  bake(train_set_transformed)
+
+```
+
+```{r}
+
+train_set_baked %>% 
+  select(lnwage, starts_with("edyrs")) %>% 
+  pivot_longer(-lnwage) %>% 
+  ggplot(aes(x = value, y = lnwage, color = name)) + 
+  geom_smooth(method = "lm", se = FALSE)
 
 ```
 

@@ -70,7 +70,7 @@ professions = c(
 
 data(train_set)
 
-train_set = train_set %>%
+train_set_transformed = train_set %>%
   rename(ID = 1) %>%
   pivot_longer(cols = all_of(professions), names_to = "profession") %>%
   filter(value == 1) %>%
@@ -92,7 +92,6 @@ train_set = train_set %>%
   select(-value) %>%
   identity()
 
-train_set_transformed = train_set
 
 # data(test_set)
 # 
@@ -103,7 +102,7 @@ train_set_transformed = train_set
 
 ```{r recipe_preprocessing}
 
-preprocess_recipe = recipe(lnwage ~ ., train_set)
+preprocess_recipe = recipe(lnwage ~ ., train_set_transformed)
 
 
 ```
@@ -130,9 +129,9 @@ with skewness.
 preprocess_recipe = preprocess_recipe %>%
   step_YeoJohnson(ends_with("sq"))
 
-train_set_transformed = preprocess_recipe %>% 
+train_set_baked = preprocess_recipe %>% 
   prep() %>% 
-  bake(train_set)
+  bake(train_set_transformed)
 
 
 
@@ -140,7 +139,7 @@ train_set_transformed = preprocess_recipe %>%
 
 ```{r plot_outliers_after_transformation}
 
-train_set_transformed %>% 
+train_set_baked %>% 
   select(ends_with("sq")) %>% 
   pivot_longer(everything()) %>% 
   ggplot(aes(y = value)) + 
@@ -151,13 +150,11 @@ train_set_transformed %>%
 
 ## Numeric features
 
-When we look at the distribution of the
-features we can see that experience (and especially squared experience) is quite
-skewed with right tail outliers.There is a question of whether this is "a feature or a bug" since the squaring was introduced to catch the nonlinearity in experience. 
+
 
 ```{r dist_of_numeric_features}
 
-train_set_transformed %>% 
+train_set_baked %>% 
   select(where(~ is.numeric(.x) && length(unique(.x)) > 2)) %>% 
   pivot_longer(cols = -ID) %>% 
   ggplot(aes(x = value)) + 
@@ -172,7 +169,7 @@ When looking at the correlations of the numeric features with lnwage we see that
 
 ```{r correlations_of_numeric_features}
 
-train_set_transformed %>% 
+train_set_baked %>% 
   select(-ID) %>% 
   select(where(~ is.numeric(.x) && length(unique(.x)) > 2)) %>% 
   correlate() %>% 
@@ -190,7 +187,7 @@ train_set_transformed %>%
 
 ```{r scatterplot_of_numeric_features}
 
-train_set_transformed %>% 
+train_set_baked %>% 
   select(where(~ is.numeric(.x) && length(unique(.x)) > 2), lnwage,-ID) %>% 
   pivot_longer(-lnwage) %>% 
   ggplot(aes(x = value, y = lnwage)) + 
@@ -207,7 +204,7 @@ Does experience and education years (after 18 years old)sum up to age? Need to t
 
 ```{r age_distribution}
 
-train_set %>% 
+train_set_baked %>% 
   mutate(age = expp + edyrs + 18) %>% 
   ggplot(aes(x = age)) + 
   geom_histogram() + 
@@ -223,7 +220,7 @@ There are many features that are the results of one hot encoding of the categori
 
 ```{r boxplot_by_target, fig.height=7}
 
-train_set_transformed %>% 
+train_set_baked %>% 
   select(where(is.factor), lnwage) %>% 
   pivot_longer(-lnwage) %>% 
   ggplot(aes(x = value, y = lnwage)) + 
@@ -242,7 +239,7 @@ South is the most low paying and the most frequent area
 
 ```{r target_distribution_by_area}
 
-train_set_transformed %>% 
+train_set_baked %>% 
   select(lnwage, area) %>% 
   ggplot(aes(x = reorder(area,lnwage,FUN = mean), y = lnwage)) + 
   geom_boxplot() + 
@@ -253,7 +250,7 @@ train_set_transformed %>%
 
 ```{r area_distribution}
 
-train_set_transformed %>% 
+train_set_baked %>% 
   count(area) %>% 
   mutate(n = n/sum(n)) %>% 
   ggplot(aes(x = reorder(area,n), y = n)) + 
@@ -274,7 +271,7 @@ In general the data looks good (computer, business and finance making more than 
 
 ```{r target_distribution_by_profession}
 
-train_set_transformed %>% 
+train_set_baked %>% 
   select(lnwage, profession) %>% 
   ggplot(aes(x = reorder(profession,lnwage,FUN = mean), y = lnwage)) + 
   geom_boxplot() + 
@@ -285,7 +282,7 @@ train_set_transformed %>%
 
 ```{r profession_distribution}
 
-train_set_transformed %>% 
+train_set_baked %>% 
   count(profession) %>% 
   mutate(n = n/sum(n)) %>% 
   ggplot(aes(x = reorder(profession,n), y = n, fill = (n <= 0.025))) + 
@@ -301,12 +298,11 @@ train_set_transformed %>%
 ```{r lump_rare_profession}
 
 preprocess_recipe = preprocess_recipe %>% 
-  step_mutate(profession = fct_lump_prop(profession,0.025,
-                                    other_level = "other"))
+  step_other(profession,threshold = 0.025)
 
-train_set_transformed = preprocess_recipe %>% 
+train_set_baked = preprocess_recipe %>% 
   prep() %>% 
-  bake(train_set)
+  bake(train_set_transformed)
 
 ```
 
@@ -317,7 +313,7 @@ them all in one category (other)
 
 ```{r target_distribution_by_profession_after_lumping}
 
-train_set_transformed %>% 
+train_set_baked %>% 
   select(lnwage, profession) %>% 
   ggplot(aes(x = reorder(profession,lnwage,FUN = mean), y = lnwage,
              fill = (profession == "other"))) + 
@@ -336,7 +332,7 @@ train_set_transformed %>%
 
 ```{r target_distribution_by_race}
 
-train_set_transformed %>% 
+train_set_baked %>% 
   select(lnwage, race) %>% 
   ggplot(aes(x = reorder(race,lnwage,FUN = mean), y = lnwage)) + 
   geom_boxplot() + 
@@ -347,7 +343,7 @@ train_set_transformed %>%
 
 ```{r race_distribution}
 
-train_set_transformed %>% 
+train_set_baked %>% 
   count(race) %>% 
   mutate(n = n/sum(n)) %>% 
   ggplot(aes(x = reorder(race,n), y = n,fill = (n <= 0.05))) + 

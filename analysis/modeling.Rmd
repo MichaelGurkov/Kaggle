@@ -59,60 +59,102 @@ professions = c(
 
 data("train_set")
 
-train_set =  train_set %>% 
-  rename(ID = 1) %>% 
-  pivot_longer(cols = all_of(professions),names_to = "profession") %>% 
+train_set_transformed = train_set %>%
+  rename(ID = 1) %>%
+  pivot_longer(cols = all_of(professions), names_to = "profession") %>%
+  filter(value == 1) %>%
+  select(-value) %>%
+  mutate(profession = factor(profession))%>% 
+  rowwise() %>% 
+  mutate(white = 1 - sum(c_across(c("black","hisp","otherrace")))) %>% 
+  ungroup() %>% 
+  pivot_longer(cols = c(c("black","hisp","otherrace","white")),
+               names_to = "race") %>% 
   filter(value == 1) %>% 
-  select(-value)
+  select(-value) %>% 
+  rowwise() %>% 
+  mutate(west = 1 - sum(c_across(c("northeast","northcentral","south")))) %>% 
+  ungroup() %>% 
+  pivot_longer(cols = c(c("northeast","northcentral","south","west")),
+               names_to = "area") %>%
+  filter(value == 1) %>%
+  select(-value) %>%
+  identity()
 
 data("test_set")
 
-test_set = test_set %>% 
-  pivot_longer(cols = all_of(professions),names_to = "profession") %>% 
+test_set = test_set %>%
+  rename(ID = 1) %>%
+  pivot_longer(cols = all_of(professions), names_to = "profession") %>%
+  filter(value == 1) %>%
+  select(-value) %>%
+  mutate(profession = factor(profession))%>% 
+  rowwise() %>% 
+  mutate(white = 1 - sum(c_across(c("black","hisp","otherrace")))) %>% 
+  ungroup() %>% 
+  pivot_longer(cols = c(c("black","hisp","otherrace","white")),
+               names_to = "race") %>% 
   filter(value == 1) %>% 
-  select(-value)
+  select(-value) %>% 
+  rowwise() %>% 
+  mutate(west = 1 - sum(c_across(c("northeast","northcentral","south")))) %>% 
+  ungroup() %>% 
+  pivot_longer(cols = c(c("northeast","northcentral","south","west")),
+               names_to = "area") %>%
+  filter(value == 1) %>%
+  select(-value) %>%
+  identity()
+
 
 ```
 
 ```{r preprocessing}
 
-dummy_recipe = recipe(lnwage ~ ., data = train_set) %>% 
+basic_recipe = recipe(lnwage ~ ., data = train_set_transformed) %>% 
   update_role(ID,new_role = "id variable") %>% 
-  step_YeoJohnson(c("exppsq","expfsq")) %>% 
-  step_dummy(profession) %>% 
-  step_normalize(all_numeric(),all_numeric(), -all_outcomes())
+  step_YeoJohnson(c("exppsq","expfsq"))%>% 
+  step_other(profession,threshold = 0.025)%>% 
+  step_normalize(all_numeric(), -all_outcomes())
 
-encode_recipe = recipe(lnwage ~ ., data = train_set) %>% 
-  update_role(ID,new_role = "id variable") %>% 
-  step_YeoJohnson(c("exppsq","expfsq")) %>% 
-  step_lencode_glm(profession,outcome = vars(lnwage)) %>% 
-  step_normalize(all_numeric(),all_numeric(), -all_outcomes())
+dummy_recipe = basic_recipe %>% 
+  step_dummy(c(profession, race, area)) 
 
-interaction_rec = encode_recipe %>% 
-  step_interact(~profession:edyrs) %>% 
-  step_normalize(all_numeric(),all_numeric(), -all_outcomes())
-  
+encode_recipe = basic_recipe %>%
+  step_lencode_glm(c(profession, race, area),outcome = vars(lnwage))
+
+
 ```
 
 ```{r set_models_spec}
 
-rf_model = rand_forest(trees = 1000) %>% 
-  set_mode("regression") %>% 
-  set_engine("ranger")
-  
+linear_model = linear_reg() %>% 
+  set_engine("lm")
 
 lasso_model = linear_reg(penalty = tune(), mixture = 1) %>% 
   set_engine("glmnet")
 
-
+rf_model = rand_forest(trees = 1000) %>% 
+  set_mode("regression") %>% 
+  set_engine("ranger")
 
 
 ```
 
+```{r test_drive, eval=FALSE}
+
+workflow() %>% 
+  add_recipe(encode_recipe) %>% 
+  add_model(lasso_model) %>% 
+  fit(train_set_transformed)
+
+```
+
+
+
 ```{r set_cross_validation_and_tuning}
 
-cv_folds = train_set %>% 
-  vfold_cv(v = 10, repeats = 3)
+cv_folds = train_set_transformed %>% 
+  vfold_cv(v = 10,repeats = 3)
 
 
 ```
@@ -120,11 +162,10 @@ cv_folds = train_set %>%
 ```{r estimation}
 
 models_set = workflow_set(
-  preproc = list(
-    encode = encode_recipe,
-    interact = interaction_rec
-  ),
-  models = list(rf = rf_model, lasso = lasso_model)
+  preproc = list(dummy = dummy_recipe,
+                 encode = encode_recipe),
+  models = list(linear = linear_model,
+                lasso = lasso_model)
 )
 
 resample_res = models_set %>% 

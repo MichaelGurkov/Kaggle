@@ -373,14 +373,15 @@ train_set_baked %>%
 
 ##Interactions
 
-```{r}
+```{r check_for_race_edyrs_interaction}
 
-train_set_transformed %>% 
+train_set_transformed %>%
   ggplot(aes(x = edyrs, y = lnwage, color = race)) + 
   geom_smooth(method = "lm", se = FALSE)
 
 ```
 
+There seems to be an interaction between race and education - the effect of education on wage changes with race.
 
 ```{r add_interaction_between_edyrs_and_race}
 
@@ -394,15 +395,16 @@ train_set_baked = preprocess_recipe %>%
 
 ```
 
-```{r}
+```{r check_for_area_edyrs_interaction}
 
-train_set_baked %>% 
-  select(lnwage, starts_with("edyrs")) %>% 
-  pivot_longer(-lnwage) %>% 
-  ggplot(aes(x = value, y = lnwage, color = name)) + 
+train_set_transformed %>% 
+  ggplot(aes(x = edyrs, y = lnwage, color = area)) + 
   geom_smooth(method = "lm", se = FALSE)
 
 ```
+
+Looking at an interaction between area and education gives nothing.
+
 
 
 # Summary

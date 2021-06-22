@@ -85,7 +85,7 @@ train_set_transformed = train_set %>%
 
 data("test_set")
 
-test_set = test_set %>%
+test_set_transformed = test_set %>%
   rename(ID = 1) %>%
   pivot_longer(cols = all_of(professions), names_to = "profession") %>%
   filter(value == 1) %>%
@@ -115,14 +115,31 @@ test_set = test_set %>%
 basic_recipe = recipe(lnwage ~ ., data = train_set_transformed) %>% 
   update_role(ID,new_role = "id variable") %>% 
   step_YeoJohnson(c("exppsq","expfsq"))%>% 
+  step_other(profession,threshold = 0.025)
+
+normalized_recipe = recipe(lnwage ~ ., data = train_set_transformed) %>% 
+  update_role(ID,new_role = "id variable") %>% 
+  step_YeoJohnson(c("exppsq","expfsq"))%>% 
   step_other(profession,threshold = 0.025)%>% 
   step_normalize(all_numeric(), -all_outcomes())
 
-dummy_recipe = basic_recipe %>% 
+
+dummy_basic = basic_recipe %>% 
+  step_dummy(c(profession, race, area)) %>% 
+  step_interact(~edyrs:starts_with("race"))%>% 
+  step_normalize(all_numeric(), -all_outcomes())
+
+encode_basic = basic_recipe %>%
+  step_lencode_glm(c(profession, race, area),outcome = vars(lnwage)) %>% 
+  step_interact(~edyrs:race)%>% 
+  step_normalize(all_numeric(), -all_outcomes())
+
+
+dummy_normalized = normalized_recipe %>% 
   step_dummy(c(profession, race, area)) %>% 
   step_interact(~edyrs:starts_with("race"))
 
-encode_recipe = basic_recipe %>%
+encode_normalized = normalized_recipe %>%
   step_lencode_glm(c(profession, race, area),outcome = vars(lnwage)) %>% 
   step_interact(~edyrs:race)
 
@@ -137,42 +154,15 @@ linear_model = linear_reg() %>%
 lasso_model = linear_reg(penalty = tune(), mixture = 1) %>% 
   set_engine("glmnet")
 
-cart_model = decision_tree(cost_complexity = tune(), min_n = tune()) %>% 
-   set_engine("rpart") %>% 
-   set_mode("regression")
-
-bag_cart_model = bag_tree() %>% 
-   set_engine("rpart", times = 50L) %>% 
-   set_mode("regression")
-
-rf_model = rand_forest(mtry = tune(), min_n = tune(), trees = 1000) %>% 
-   set_engine("ranger") %>% 
-   set_mode("regression")
-
-xgb_model = boost_tree(tree_depth = tune(), learn_rate = tune(),
-                       loss_reduction = tune(), 
-                       min_n = tune(), sample_size = tune(), trees = tune()) %>% 
-   set_engine("xgboost") %>% 
-   set_mode("regression")
-
-
 ```
-
-```{r test_drive, eval=FALSE}
-
-workflow() %>% 
-  add_recipe(encode_recipe) %>% 
-  add_model(lasso_model) %>% 
-  fit(train_set_transformed)
-
-```
-
 
 
 ```{r set_cross_validation_and_tuning}
 
 cv_folds = train_set_transformed %>% 
-  vfold_cv(v = 10,repeats = 5)
+  vfold_cv(v = 10, repeats = 5)
+
+param_grid = grid_regular(penalty(),levels = 50 )
 
 
 ```
@@ -180,20 +170,19 @@ cv_folds = train_set_transformed %>%
 ```{r estimation}
 
 models_set = workflow_set(
-  preproc = list(dummy = dummy_recipe,
-                 encode = encode_recipe),
+  preproc = list(dummy_basic = dummy_basic,
+                 dummy_normalized = dummy_normalized,
+                 encode_basic = encode_basic,
+                 encode_normalized = encode_normalized),
   models = list(linear = linear_model,
-                lasso = lasso_model,
-                tree = cart_model,
-                bag_tree = bag_cart_model,
-                xgb = xgb_model)
+                lasso = lasso_model)
 )
 
 resample_res = models_set %>%
   workflow_map(
     fn = "tune_grid",
     resamples = cv_folds,
-    grid = 25,
+    grid = param_grid,
     control = control_grid(parallel_over = "everything")
   )
 
@@ -205,34 +194,36 @@ resample_res = models_set %>%
 ```{r evaluation}
 
 resample_res %>% 
-  collect_metrics() %>% 
+  rank_results(rank_metric = "rmse") %>% 
   filter(.metric == "rmse") %>% 
-  group_by(wflow_id) %>% 
-  slice_min(2) %>% 
-  select(wflow_id, mean,std_err) %>% 
-  mutate(mse = mean ^ 2)
+  select(wflow_id,.config,mean, rank) %>% 
+  mutate(mean = mean ^ 2) %>% 
+  ggplot(aes(x = rank, y = mean)) + 
+  geom_point()
 
 ```
 
 ```{r prediction, eval=FALSE}
 
-lasso_tune = workflow() %>% 
-  add_recipe(encode_recipe) %>% 
-  add_model(lasso_model) %>% 
-  tune_grid(resamples = cv_folds, grid = 15)
+test_split = make_splits(list(analysis = 1:1000, assessment = 1001:1500),
+                         bind_rows(train_set_transformed, test_set_transformed))
 
-lasso_fit = workflow() %>% 
-  add_recipe(encode_recipe) %>% 
-  add_model(lasso_model) %>% 
-  finalize_workflow(select_best(lasso_tune,metric = "rmse")) %>% 
-  fit(train_set)
 
-lasso_fit %>% 
-  predict(test_set) %>% 
-  rename(lnwage = 1) %>% 
-  bind_cols(select(test_set,ID)) %>% 
-  relocate(ID) %>% 
-  write_csv("C:\\Users\\Home\\Desktop\\test_submission.csv")
+best_model = resample_res %>% 
+  pull_workflow_set_result("encode_lasso") %>% 
+  select_best(metric = "rmse")
+
+pred = resample_res %>% 
+  pull_workflow("encode_lasso") %>% 
+  finalize_workflow(best_model) %>% 
+  last_fit(test_split)
+
+
+test_set_transformed %>% 
+  select("ID") %>% 
+  bind_cols(pred$.predictions[[1]] %>% 
+  select(lnwage = .pred)) %>% 
+  write_csv("C:\\Users\\internet\\Desktop\\temp_lasso_encode.csv")
 
 
 ```

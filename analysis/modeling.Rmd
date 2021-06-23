@@ -81,6 +81,12 @@ train_set_transformed = train_set %>%
                names_to = "area") %>%
   filter(value == 1) %>%
   select(-value) %>%
+  mutate(male = 1 - female) %>%
+  ungroup() %>%
+  pivot_longer(cols = c(c("female","male")),
+               names_to = "sex") %>%
+  filter(value == 1) %>%
+  select(-value) %>%
   identity()
 
 data("test_set")
@@ -105,17 +111,19 @@ test_set_transformed = test_set %>%
                names_to = "area") %>%
   filter(value == 1) %>%
   select(-value) %>%
+  mutate(male = 1 - female) %>% 
+  ungroup() %>% 
+  pivot_longer(cols = c(c("female","male")),
+               names_to = "sex") %>%
+  filter(value == 1) %>%
+  select(-value) %>% 
   identity()
+
 
 
 ```
 
 ```{r preprocessing}
-
-basic_recipe = recipe(lnwage ~ ., data = train_set_transformed) %>% 
-  update_role(ID,new_role = "id variable") %>% 
-  step_YeoJohnson(c("exppsq","expfsq"))%>% 
-  step_other(profession,threshold = 0.025)
 
 normalized_recipe = recipe(lnwage ~ ., data = train_set_transformed) %>% 
   update_role(ID,new_role = "id variable") %>% 
@@ -123,25 +131,16 @@ normalized_recipe = recipe(lnwage ~ ., data = train_set_transformed) %>%
   step_other(profession,threshold = 0.025)%>% 
   step_normalize(all_numeric(), -all_outcomes())
 
-
-dummy_basic = basic_recipe %>% 
-  step_dummy(c(profession, race, area)) %>% 
-  step_interact(~edyrs:starts_with("race"))%>% 
-  step_normalize(all_numeric(), -all_outcomes())
-
-encode_basic = basic_recipe %>%
-  step_lencode_glm(c(profession, race, area),outcome = vars(lnwage)) %>% 
-  step_interact(~edyrs:race)%>% 
-  step_normalize(all_numeric(), -all_outcomes())
-
-
 dummy_normalized = normalized_recipe %>% 
-  step_dummy(c(profession, race, area)) %>% 
-  step_interact(~edyrs:starts_with("race"))
+  step_dummy(c(profession, race, area),one_hot = FALSE) %>% 
+  step_interact(~edyrs:starts_with("race"))%>% 
+  step_interact(~starts_with("sex"):starts_with("race"))
 
 encode_normalized = normalized_recipe %>%
   step_lencode_glm(c(profession, race, area),outcome = vars(lnwage)) %>% 
-  step_interact(~edyrs:race)
+  step_dummy(sex,one_hot = FALSE) %>% 
+  step_interact(~edyrs:race)%>% 
+  step_interact(~starts_with("sex"):race)
 
 
 ```
@@ -167,13 +166,44 @@ param_grid = grid_regular(penalty(),levels = 50 )
 
 ```
 
+```{r test_drive, eval=FALSE}
+
+temp = workflow_set(
+  preproc = list(encode_basic = encode_basic,
+                 encode_normalized = encode_normalized),
+  models = list(linear = lasso_model)
+) %>%
+  workflow_map(
+    fn = "tune_grid",
+    resamples = vfold_cv(train_set_transformed,v = 2),
+    grid = 5,
+    control = control_grid(parallel_over = "everything")
+  )
+
+
+temp %>% 
+  rank_results(rank_metric = "rmse") %>% 
+  filter(.metric == "rmse") %>% 
+  select(wflow_id,.config,mean, rank) %>% 
+  mutate(mean = mean ^ 2) %>% 
+  ggplot(aes(x = rank, y = mean)) + 
+  geom_point()
+
+```
+
+
+
 ```{r estimation}
 
+# models_set = workflow_set(
+#   preproc = list(dummy_normalized = dummy_normalized,
+#                  encode_normalized = encode_normalized),
+#   models = list(linear = linear_model,
+#                 lasso = lasso_model)
+# )
+
 models_set = workflow_set(
-  preproc = list(dummy_basic = dummy_basic,
-                 dummy_normalized = dummy_normalized,
-                 encode_basic = encode_basic,
-                 encode_normalized = encode_normalized),
+  preproc = list(encode_normalized = encode_normalized),
   models = list(linear = linear_model,
                 lasso = lasso_model)
 )
@@ -210,11 +240,11 @@ test_split = make_splits(list(analysis = 1:1000, assessment = 1001:1500),
 
 
 best_model = resample_res %>% 
-  pull_workflow_set_result("encode_lasso") %>% 
+  pull_workflow_set_result("encode_normalized_lasso") %>% 
   select_best(metric = "rmse")
 
 pred = resample_res %>% 
-  pull_workflow("encode_lasso") %>% 
+  pull_workflow("encode_normalized_lasso") %>% 
   finalize_workflow(best_model) %>% 
   last_fit(test_split)
 
@@ -223,7 +253,8 @@ test_set_transformed %>%
   select("ID") %>% 
   bind_cols(pred$.predictions[[1]] %>% 
   select(lnwage = .pred)) %>% 
-  write_csv("C:\\Users\\internet\\Desktop\\temp_lasso_encode.csv")
+  write_csv(paste0(file.path(Sys.getenv("USERPROFILE")),
+                   "\\Desktop\\temp_encode_normalized_lasso.csv"))
 
 
 ```

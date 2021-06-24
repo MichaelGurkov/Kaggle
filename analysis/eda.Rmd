@@ -107,11 +107,29 @@ preprocess_recipe = recipe(lnwage ~ ., train_set_transformed)
 
 ```
 
+```{r remove_squares}
+
+preprocess_recipe = preprocess_recipe %>% 
+  step_rm(ends_with("sq")) %>% 
+  step_mutate(total_exp = expf + expp) %>% 
+  step_mutate(part_share = expp / total_exp)
+
+train_set_baked = preprocess_recipe %>% 
+  prep() %>% 
+  bake(train_set_transformed)
+
+
+
+
+```
+
+
+
 ## Outliers
 
 ```{r outliers}
 
-train_set_transformed %>% 
+train_set_baked %>% 
   select(where(~ is.numeric(.x) && length(unique(.x)) > 2),-ID,-lnwage) %>% 
   pivot_longer(everything()) %>% 
   ggplot(aes(y = value)) + 
@@ -129,7 +147,7 @@ with skewness.
 ```{r yeo_johnson_transformation}
 
 preprocess_recipe = preprocess_recipe %>%
-  step_BoxCox(ends_with("sq"))
+  step_YeoJohnson(all_numeric())
 
 train_set_baked = preprocess_recipe %>% 
   prep() %>% 
@@ -142,7 +160,7 @@ train_set_baked = preprocess_recipe %>%
 ```{r plot_outliers_after_transformation}
 
 train_set_baked %>% 
-  select(ends_with("sq")) %>% 
+  select(where(~ is.numeric(.x) && length(unique(.x)) > 2),-ID,-lnwage) %>% 
   pivot_longer(everything()) %>% 
   ggplot(aes(y = value)) + 
   geom_boxplot() + 
@@ -166,6 +184,36 @@ train_set_baked %>%
   
 
 ```
+
+```{r add_features_transformation}
+
+preprocess_recipe = preprocess_recipe %>% 
+  step_mutate_at(c("expf","expp","edyrs","total_exp","part_share"),
+                 fn = list(log = log, sq = sqrt, cube = ~. ^ 3))
+
+train_set_baked = preprocess_recipe %>% 
+  prep() %>% 
+  bake(train_set_transformed)
+
+names(train_set_baked)
+
+```
+
+
+
+```{r dist_of_numeric_features_after_transformation}
+
+train_set_baked %>% 
+  select(where(~ is.numeric(.x) && length(unique(.x)) > 2)) %>% 
+  pivot_longer(cols = -ID) %>% 
+  ggplot(aes(x = value)) + 
+  geom_histogram() + 
+  facet_wrap(~name, scales = "free") + 
+  xlab(NULL) + ylab(NULL)
+  
+
+```
+
 
 When looking at the correlations of the numeric features with lnwage we see that education and father experience are positively correlated with lnwage (the square father experience has low correlation despite the fact that lnwage has only positive values). The strange result is the negative correlation between experience (and its square) to lnwage.
 
@@ -225,6 +273,9 @@ train_set_baked %>%
   ggtitle("Scaterrplot of lnwage and numeric features")
 
 ```
+
+
+
 
 
 ## Categorical features
@@ -371,7 +422,7 @@ train_set_baked %>%
 ```
 
 
-##Interactions
+## Interactions
 
 ```{r check_for_race_edyrs_interaction}
 

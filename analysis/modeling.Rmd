@@ -81,6 +81,11 @@ train_set_transformed = train_set %>%
                names_to = "area") %>%
   filter(value == 1) %>%
   select(-value) %>%
+  mutate(male = 1 - female) %>% 
+  pivot_longer(cols = c(c("male","female")),
+               names_to = "sex") %>%
+  filter(value == 1) %>%
+  select(-value) %>% 
   identity()
 
 data("test_set")
@@ -105,6 +110,11 @@ test_set_transformed = test_set %>%
                names_to = "area") %>%
   filter(value == 1) %>%
   select(-value) %>%
+  mutate(male = 1 - female) %>% 
+  pivot_longer(cols = c(c("male","female")),
+               names_to = "sex") %>%
+  filter(value == 1) %>%
+  select(-value) %>% 
   identity()
 
 
@@ -112,44 +122,55 @@ test_set_transformed = test_set %>%
 
 ```{r preprocessing}
 
-basic_recipe = recipe(lnwage ~ ., data = train_set_transformed) %>% 
+
+full_recipe = recipe(lnwage ~ ., data = train_set_transformed) %>%
+update_role(ID,new_role = "id variable") %>%
+step_rm(ends_with("sq")) %>%
+step_mutate(total_exp = expf + expp + 0.001) %>%
+step_mutate(part_share = expp / total_exp) %>%
+step_YeoJohnson(all_numeric(), -all_outcomes()) %>%
+step_mutate_at(c("expf","expp","edyrs","total_exp","part_share"),
+fn = list(sq = ~. ^ 2)) %>%
+step_log(c("expf","expp","edyrs","total_exp","part_share"),offset = 0.01) %>%
+step_normalize(all_numeric(),-all_outcomes()) %>%
+step_lencode_glm(profession,outcome = vars(lnwage)) %>%
+step_dummy(c("race","area","sex")) %>%
+step_interact(~edyrs:starts_with("race")) %>%
+step_interact(~starts_with("sex"):starts_with("race"))
+
+
+complete_recipe = recipe(lnwage ~ ., data = train_set_transformed) %>% 
   update_role(ID,new_role = "id variable") %>% 
-  step_YeoJohnson(c("exppsq","expfsq"))%>% 
-  step_other(profession,threshold = 0.025)
-
-normalized_recipe = recipe(lnwage ~ ., data = train_set_transformed) %>% 
-  update_role(ID,new_role = "id variable") %>% 
-  step_YeoJohnson(c("exppsq","expfsq"))%>% 
-  step_other(profession,threshold = 0.025)%>% 
-  step_normalize(all_numeric(), -all_outcomes())
-
-
-dummy_basic = basic_recipe %>% 
-  step_dummy(c(profession, race, area)) %>% 
-  step_interact(~edyrs:starts_with("race"))%>% 
-  step_normalize(all_numeric(), -all_outcomes())
-
-encode_basic = basic_recipe %>%
-  step_lencode_glm(c(profession, race, area),outcome = vars(lnwage)) %>% 
-  step_interact(~edyrs:race)%>% 
-  step_normalize(all_numeric(), -all_outcomes())
-
-
-dummy_normalized = normalized_recipe %>% 
-  step_dummy(c(profession, race, area)) %>% 
+  step_rm(ends_with("sq")) %>% 
+  step_mutate(total_exp = expf + expp + 0.001) %>% 
+  step_mutate(part_share = expp / total_exp) %>% 
+  step_YeoJohnson(all_numeric(), -all_outcomes()) %>% 
+  step_mutate_at(c("expf","expp","edyrs","total_exp","part_share"),
+                 fn = list(sq = ~. ^ 2)) %>% 
+  step_normalize(all_numeric(),-all_outcomes()) %>%
+  step_lencode_glm(profession,outcome = vars(lnwage)) %>% 
+  step_dummy(c("race","area","sex")) %>% 
   step_interact(~edyrs:starts_with("race"))
 
-encode_normalized = normalized_recipe %>%
-  step_lencode_glm(c(profession, race, area),outcome = vars(lnwage)) %>% 
-  step_interact(~edyrs:race)
+
+basic_recipe = recipe(lnwage ~ ., data = train_set_transformed) %>% 
+  update_role(ID,new_role = "id variable") %>% 
+  step_rm(ends_with("sq")) %>% 
+  step_mutate(total_exp = expf + expp + 0.001) %>% 
+  step_mutate(part_share = expp / total_exp) %>% 
+  step_rm(c("expf","expp")) %>% 
+  step_YeoJohnson(all_numeric(), -all_outcomes()) %>% 
+  step_mutate_at(c("edyrs","total_exp","part_share"),
+                 fn = list(sq = ~. ^ 2)) %>% 
+  step_normalize(all_numeric(),-all_outcomes()) %>%
+  step_lencode_glm(profession,outcome = vars(lnwage)) %>% 
+  step_dummy(c("race","area","sex")) %>% 
+  step_interact(~edyrs:starts_with("race"))
 
 
 ```
 
 ```{r set_models_spec}
-
-linear_model = linear_reg() %>% 
-  set_engine("lm")
 
 lasso_model = linear_reg(penalty = tune(), mixture = 1) %>% 
   set_engine("glmnet")
@@ -157,12 +178,36 @@ lasso_model = linear_reg(penalty = tune(), mixture = 1) %>%
 ```
 
 
+```{r test_drive, eval=FALSE}
+
+
+temp_data = basic_recipe %>% 
+  prep() %>% 
+  bake(train_set_transformed)
+
+models_set = workflow_set(
+  preproc = list(basic = basic_recipe),
+  models = list(lasso = lasso_model)
+)
+
+resample_res = models_set %>%
+  workflow_map(
+    fn = "tune_grid",
+    resamples = vfold_cv(train_set_transformed, 2),
+    grid = 2
+  )
+
+```
+
+
+
+
 ```{r set_cross_validation_and_tuning}
 
 cv_folds = train_set_transformed %>% 
   vfold_cv(v = 10, repeats = 5)
 
-param_grid = grid_regular(penalty(),levels = 50 )
+param_grid = grid_regular(penalty(),levels = 50)
 
 
 ```
@@ -170,12 +215,9 @@ param_grid = grid_regular(penalty(),levels = 50 )
 ```{r estimation}
 
 models_set = workflow_set(
-  preproc = list(dummy_basic = dummy_basic,
-                 dummy_normalized = dummy_normalized,
-                 encode_basic = encode_basic,
-                 encode_normalized = encode_normalized),
-  models = list(linear = linear_model,
-                lasso = lasso_model)
+  preproc = list(basic = basic_recipe,complete_recipe = complete_recipe,
+                 full_recipe = full_recipe),
+  models = list(lasso = lasso_model)
 )
 
 resample_res = models_set %>%
@@ -210,11 +252,11 @@ test_split = make_splits(list(analysis = 1:1000, assessment = 1001:1500),
 
 
 best_model = resample_res %>% 
-  pull_workflow_set_result("encode_lasso") %>% 
+  pull_workflow_set_result("basic_lasso") %>% 
   select_best(metric = "rmse")
 
 pred = resample_res %>% 
-  pull_workflow("encode_lasso") %>% 
+  pull_workflow("basic_lasso") %>% 
   finalize_workflow(best_model) %>% 
   last_fit(test_split)
 
@@ -223,7 +265,7 @@ test_set_transformed %>%
   select("ID") %>% 
   bind_cols(pred$.predictions[[1]] %>% 
   select(lnwage = .pred)) %>% 
-  write_csv("C:\\Users\\internet\\Desktop\\temp_lasso_encode.csv")
+  write_csv("C:\\Users\\internet\\Desktop\\yaakov.csv")
 
 
 ```

@@ -129,20 +129,22 @@ rename(ID = 1) %>%
 
 ```{r preprocessing}
 
-preprocess_recipe = recipe(lnwage ~ ., train_set_transformed) %>% 
-  update_role(ID,new_role = "id variable") %>%  
+preprocess_recipe = recipe(lnwage ~ ., train_set_transformed) %>%
+  update_role(ID,new_role = "id variable") %>%
   step_rm(ends_with("sq"))%>%
   step_YeoJohnson(all_numeric(),-ID,-lnwage) %>%
   step_mutate(total_exp = expp + expf + 0.01) %>%
-  step_mutate(part_time_share = expp / (total_exp)) %>% 
+  step_mutate(part_time_share = expp / (total_exp)) %>%
   step_rm(c(expp,expf)) %>%
   step_mutate(exp_sq = total_exp ^ 2) %>%
-  step_dummy(c(advdeg,colldeg, msa)) %>%
-  step_lencode_glm(c(profession,race,sex, area),outcome = vars(lnwage)) %>%
-  step_interact(~sex:race) %>%
+  step_dummy(c(advdeg,colldeg, msa,sex)) %>%
+  step_lencode_glm(c(profession,race, area),outcome = vars(lnwage)) %>%
+  step_interact(~sex_male:race) %>%
+  step_interact(~sex_male:profession) %>%
   step_interact(~edyrs:race) %>%
-  step_interact(~profession:sex) %>%
-  step_normalize(all_numeric(), -all_outcomes())
+  step_normalize(all_numeric(), -all_outcomes()) %>%
+  identity()
+
 ```
 
 ```{r set_models_spec}
@@ -212,7 +214,7 @@ wf_tune %>%
 
 ```
 
-```{r prediction}
+```{r prediction, eval=FALSE}
 
 test_split = make_splits(list(analysis = 1:1000, assessment = 1001:1500),
                          bind_rows(train_set_transformed, test_set_transformed))
@@ -221,7 +223,7 @@ test_split = make_splits(list(analysis = 1:1000, assessment = 1001:1500),
 best_model = wf_tune %>%
   select_best(metric = "rmse")
 
-pred = wf_tune %>%
+pred = wf %>%
   finalize_workflow(best_model) %>%
   last_fit(test_split)
 
@@ -231,7 +233,7 @@ test_set_transformed %>%
   bind_cols(pred$.predictions[[1]] %>%
   select(lnwage = .pred)) %>%
   write_csv(paste0(file.path(Sys.getenv("USERPROFILE")),
-                   "\\Desktop\\temp_encode_normalized_lasso.csv"))
+                   "\\Desktop\\dummy_twoway_lasso.csv"))
 
 
 

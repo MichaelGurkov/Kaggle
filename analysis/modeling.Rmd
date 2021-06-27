@@ -24,6 +24,8 @@ library(baguette)
 
 library(embed)
 
+library(vip)
+
 library(workflowsets)
 
 ```
@@ -81,18 +83,20 @@ train_set_transformed = train_set %>%
                names_to = "area") %>%
   filter(value == 1) %>%
   select(-value) %>%
-  mutate(male = 1 - female) %>%
-  ungroup() %>%
-  pivot_longer(cols = c(c("female","male")),
+  mutate(male = 1 - female) %>% 
+   pivot_longer(cols = c(c("male","female")),
                names_to = "sex") %>%
   filter(value == 1) %>%
-  select(-value) %>%
+  select(-value) %>% 
+  mutate(across(where(is.character),as.factor)) %>% 
+  mutate(across(where(~length(unique(.)) <= 2), as.factor)) %>% 
   identity()
+
 
 data("test_set")
 
 test_set_transformed = test_set %>%
-  rename(ID = 1) %>%
+rename(ID = 1) %>%
   pivot_longer(cols = all_of(professions), names_to = "profession") %>%
   filter(value == 1) %>%
   select(-value) %>%
@@ -112,45 +116,38 @@ test_set_transformed = test_set %>%
   filter(value == 1) %>%
   select(-value) %>%
   mutate(male = 1 - female) %>% 
-  ungroup() %>% 
-  pivot_longer(cols = c(c("female","male")),
+   pivot_longer(cols = c(c("male","female")),
                names_to = "sex") %>%
   filter(value == 1) %>%
   select(-value) %>% 
+  mutate(across(where(is.character),as.factor)) %>% 
+  mutate(across(where(~length(unique(.)) <= 2), as.factor)) %>% 
   identity()
-
 
 
 ```
 
 ```{r preprocessing}
 
-normalized_recipe = recipe(lnwage ~ ., data = train_set_transformed) %>% 
-  update_role(ID,new_role = "id variable") %>% 
-  step_YeoJohnson(c("exppsq","expfsq"))%>% 
-  step_other(profession,threshold = 0.025)%>% 
+preprocess_recipe = recipe(lnwage ~ ., train_set_transformed) %>% 
+  update_role(ID,new_role = "id variable") %>%  
+  step_rm(ends_with("sq"))%>%
+  step_YeoJohnson(all_numeric(),-ID,-lnwage) %>%
+  step_mutate(total_exp = expp + expf + 0.01) %>%
+  step_mutate(part_time_share = expp / (total_exp)) %>% 
+  step_rm(c(expp,expf)) %>%
+  step_mutate(exp_sq = total_exp ^ 2) %>%
+  step_dummy(c(advdeg,colldeg, msa)) %>%
+  step_lencode_glm(c(profession,race,sex, area),outcome = vars(lnwage)) %>%
+  step_interact(~sex:race) %>%
+  step_interact(~edyrs:race) %>%
+  step_interact(~profession:sex) %>%
   step_normalize(all_numeric(), -all_outcomes())
-
-dummy_normalized = normalized_recipe %>% 
-  step_dummy(c(profession, race, area),one_hot = FALSE) %>% 
-  step_interact(~edyrs:starts_with("race"))%>% 
-  step_interact(~starts_with("sex"):starts_with("race"))
-
-encode_normalized = normalized_recipe %>%
-  step_lencode_glm(c(profession, race, area),outcome = vars(lnwage)) %>% 
-  step_dummy(sex,one_hot = FALSE) %>% 
-  step_interact(~edyrs:race)%>% 
-  step_interact(~starts_with("sex"):race)
-
-
 ```
 
 ```{r set_models_spec}
 
-linear_model = linear_reg() %>% 
-  set_engine("lm")
-
-lasso_model = linear_reg(penalty = tune(), mixture = 1) %>% 
+model = linear_reg(penalty = tune(), mixture = 1) %>% 
   set_engine("glmnet")
 
 ```
@@ -161,100 +158,81 @@ lasso_model = linear_reg(penalty = tune(), mixture = 1) %>%
 cv_folds = train_set_transformed %>% 
   vfold_cv(v = 10, repeats = 5)
 
-param_grid = grid_regular(penalty(),levels = 50 )
+param_grid = grid_regular(penalty(),levels = 50)
 
 
 ```
-
-```{r test_drive, eval=FALSE}
-
-temp = workflow_set(
-  preproc = list(encode_basic = encode_basic,
-                 encode_normalized = encode_normalized),
-  models = list(linear = lasso_model)
-) %>%
-  workflow_map(
-    fn = "tune_grid",
-    resamples = vfold_cv(train_set_transformed,v = 2),
-    grid = 5,
-    control = control_grid(parallel_over = "everything")
-  )
-
-
-temp %>% 
-  rank_results(rank_metric = "rmse") %>% 
-  filter(.metric == "rmse") %>% 
-  select(wflow_id,.config,mean, rank) %>% 
-  mutate(mean = mean ^ 2) %>% 
-  ggplot(aes(x = rank, y = mean)) + 
-  geom_point()
-
-```
-
 
 
 ```{r estimation}
 
-# models_set = workflow_set(
-#   preproc = list(dummy_normalized = dummy_normalized,
-#                  encode_normalized = encode_normalized),
-#   models = list(linear = linear_model,
-#                 lasso = lasso_model)
-# )
+wf = workflow() %>% 
+  add_recipe(preprocess_recipe) %>% 
+  add_model(model)
 
-models_set = workflow_set(
-  preproc = list(encode_normalized = encode_normalized),
-  models = list(linear = linear_model,
-                lasso = lasso_model)
-)
+wf_tune = wf %>% 
+  tune_grid(resamples = cv_folds, grid = param_grid)
 
-resample_res = models_set %>%
-  workflow_map(
-    fn = "tune_grid",
-    resamples = cv_folds,
-    grid = param_grid,
-    control = control_grid(parallel_over = "everything")
-  )
-
-
-
+final_model = wf %>% 
+  finalize_workflow(select_best(wf_tune,metric = "rmse")) %>% 
+  fit(train_set_transformed)
 
 ```
 
 ```{r evaluation}
 
-resample_res %>% 
-  rank_results(rank_metric = "rmse") %>% 
-  filter(.metric == "rmse") %>% 
-  select(wflow_id,.config,mean, rank) %>% 
-  mutate(mean = mean ^ 2) %>% 
-  ggplot(aes(x = rank, y = mean)) + 
-  geom_point()
+final_model %>% 
+  extract_model() %>% 
+  tidy() %>% 
+  mutate(diff = abs(lambda - select_best(wf_tune,metric = "rmse")$penalty)) %>% 
+  filter(diff == min(diff)) %>% 
+  filter(!term == "(Intercept)") %>% 
+  select(-diff) %>% 
+  ggplot(aes(x = reorder(term, abs(estimate)),
+             y = abs(estimate), fill = as.factor(sign(estimate)))) + 
+  geom_col() + 
+  coord_flip() + 
+  labs(fill = "Coefficient sign", title = "Lasso selection") + xlab(NULL) + ylab(NULL)
+  
+
 
 ```
 
-```{r prediction, eval=FALSE}
+```{r metrics}
+
+wf_tune %>% 
+  collect_metrics() %>% 
+  filter(.metric == "rmse") %>% 
+  filter(penalty == select_best(wf_tune,metric = "rmse")$penalty) %>% 
+  mutate(MSE = mean ^ 2) %>% 
+  select(.config, penalty, MSE)
+
+
+
+
+```
+
+```{r prediction}
 
 test_split = make_splits(list(analysis = 1:1000, assessment = 1001:1500),
                          bind_rows(train_set_transformed, test_set_transformed))
 
 
-best_model = resample_res %>% 
-  pull_workflow_set_result("encode_normalized_lasso") %>% 
+best_model = wf_tune %>%
   select_best(metric = "rmse")
 
-pred = resample_res %>% 
-  pull_workflow("encode_normalized_lasso") %>% 
-  finalize_workflow(best_model) %>% 
+pred = wf_tune %>%
+  finalize_workflow(best_model) %>%
   last_fit(test_split)
 
 
-test_set_transformed %>% 
-  select("ID") %>% 
-  bind_cols(pred$.predictions[[1]] %>% 
-  select(lnwage = .pred)) %>% 
+test_set_transformed %>%
+  select("ID") %>%
+  bind_cols(pred$.predictions[[1]] %>%
+  select(lnwage = .pred)) %>%
   write_csv(paste0(file.path(Sys.getenv("USERPROFILE")),
                    "\\Desktop\\temp_encode_normalized_lasso.csv"))
+
 
 
 ```

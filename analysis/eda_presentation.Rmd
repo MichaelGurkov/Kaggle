@@ -1,0 +1,418 @@
+---
+title: "EDA"
+classoption: t
+output:
+  beamer_presentation:
+    includes:
+      in_header: !expr here::here('analysis/PresentationPreamble.tex')
+    latex_engine: xelatex
+    slide_level: 2
+---
+
+```{r include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, error = FALSE, warning = FALSE,
+                      message = FALSE)
+
+```
+
+
+```{r load_libraries}
+
+devtools::load_all()
+
+library(tidyverse)
+
+library(tidymodels)
+
+library(embed)
+
+library(corrr)
+
+library(cowplot)
+
+library(ggmosaic)
+
+library(glue)
+
+```
+
+```{r set_params}
+
+professions = c(
+  "manager",
+  "business",
+  "financialop",
+  "computer",
+  "architect",
+  "scientist",
+  "socialworker",
+  "postseceduc",
+  "legaleduc",
+  "artist",
+  "lawyerphysician",
+  "healthcare",
+  "healthsupport",
+  "protective",
+  "foodcare",
+  "building",
+  "sales",
+  "officeadmin",
+  "farmer",
+  "constructextractinstall",
+  "production",
+  "transport"
+)
+
+
+
+```
+
+```{r load_data}
+
+data(train_set)
+
+train_set_transformed = train_set %>%
+  rename(ID = 1) %>%
+  pivot_longer(cols = all_of(professions), names_to = "profession") %>%
+  filter(value == 1) %>%
+  select(-value) %>%
+  mutate(profession = factor(profession))%>% 
+  rowwise() %>% 
+  mutate(white = 1 - sum(c_across(c("black","hisp","otherrace")))) %>% 
+  ungroup() %>% 
+  pivot_longer(cols = c(c("black","hisp","otherrace","white")),
+               names_to = "race") %>% 
+  filter(value == 1) %>% 
+  select(-value) %>% 
+  rowwise() %>% 
+  mutate(west = 1 - sum(c_across(c("northeast","northcentral","south")))) %>% 
+  ungroup() %>% 
+  pivot_longer(cols = c(c("northeast","northcentral","south","west")),
+               names_to = "area") %>%
+  filter(value == 1) %>%
+  select(-value) %>%
+  mutate(male = 1 - female) %>% 
+   pivot_longer(cols = c(c("male","female")),
+               names_to = "sex") %>%
+  filter(value == 1) %>%
+  select(-value) %>% 
+  mutate(across(where(is.character),as.factor)) %>% 
+  mutate(across(where(~length(unique(.)) <= 2), as.factor)) %>% 
+  identity()
+
+
+# data(test_set)
+# 
+# test_set = test_set %>% 
+#   rename("ID" = 1)
+
+```
+
+
+```{r recipe_preprocessing}
+
+preprocess_recipe = recipe(lnwage ~ ., train_set_transformed) %>% 
+  update_role(ID,new_role = "id variable") %>%  
+  step_rm(ends_with("sq"))%>%
+  step_YeoJohnson(all_numeric(),-ID,-lnwage) %>%
+  step_mutate(total_exp = expp + expf + 0.01) %>%
+  step_mutate(part_time_share = expp / (total_exp)) %>% 
+  step_rm(c(expp,expf)) %>%
+  step_mutate(exp_sq = total_exp ^ 2) %>%
+  step_dummy(c(advdeg,colldeg, msa)) %>%
+  step_lencode_glm(c(profession,race,sex, area),outcome = vars(lnwage)) %>%
+  step_interact(~sex:race) %>%
+  step_interact(~edyrs:race) %>%
+  step_interact(~profession:sex) %>%
+  step_normalize(all_numeric(), -all_outcomes())
+
+
+
+train_set_baked = preprocess_recipe %>% 
+  prep() %>% 
+  bake(train_set_transformed)
+
+  
+
+```
+
+## Game plan
+
+* Information beats model
+
+# Outliers
+## Raw data
+
+```{r outliers}
+
+train_set_transformed %>% 
+  select(where(~ is.numeric(.x) && length(unique(.x)) > 2),-ID) %>% 
+  pivot_longer(everything()) %>% 
+  ggplot(aes(y = value)) + 
+  geom_boxplot() + 
+  facet_wrap(~name, scales = "free") + 
+  xlab(NULL) + ylab(NULL)
+
+```
+
+# Numeric features
+
+## Features scatterplot vs target
+
+```{r scatterplot_of_numeric_features}
+
+train_set_transformed %>% 
+  select(where(~ is.numeric(.x) && length(unique(.x)) > 2), lnwage,-ID) %>% 
+  pivot_longer(-lnwage) %>% 
+  ggplot(aes(x = value, y = lnwage)) + 
+  geom_point() + 
+  geom_smooth(method = "glm") + 
+  facet_wrap(~name, scales = "free") + 
+  xlab(NULL) + ylab(NULL) + 
+  ggtitle("Scaterrplot of lnwage and numeric features")
+
+```
+
+
+# Categorical features
+
+## Area - south is the poorest and the most frequent
+
+```{r target_distribution_by_area}
+
+auxilary_df = train_set_transformed %>% 
+  group_by(area) %>% 
+  summarise(avg = mean(lnwage), .groups = "drop")
+
+bp_plot = train_set_transformed %>%
+  select(lnwage, area) %>%
+  ggplot() +
+  geom_boxplot(aes(x = reorder(area, lnwage, FUN = median), y = lnwage)) +
+  geom_point(data = auxilary_df,aes(x = area, y = avg),
+             color = "red", shape = 18, size = 3) +
+  coord_flip() +
+  xlab(NULL) + ylab(NULL) + ggtitle("Average lnwage by area")
+
+bar_plot = train_set_transformed %>% 
+  count(area) %>% 
+  mutate(n = n/sum(n)) %>% 
+  ggplot(aes(x = reorder(area,n), y = n)) + 
+  geom_col() + 
+  coord_flip() + 
+  scale_y_continuous(labels = scales::percent_format()) + 
+  xlab(NULL) + ylab(NULL) + ggtitle("Area distribution")
+
+plot_grid(bp_plot, bar_plot, nrow = 1)
+
+rm(bp_plot, bar_plot, auxilary_df)
+```
+
+## Race - whites are the wealthiest and the most frequent
+
+```{r target_distribution_by_race}
+
+auxilary_df = train_set_transformed %>% 
+  group_by(race) %>% 
+  summarise(avg = mean(lnwage), .groups = "drop")
+
+bp_plot = train_set_transformed %>%
+  select(lnwage, race) %>%
+  ggplot() +
+  geom_boxplot(aes(x = reorder(race, lnwage, FUN = median), y = lnwage)) +
+  geom_point(data = auxilary_df,aes(x = race, y = avg),
+             color = "red", shape = 18, size = 3) +
+  coord_flip() +
+  xlab(NULL) + ylab(NULL) + ggtitle("Average lnwage by race")
+
+bar_plot = train_set_transformed %>% 
+  count(race) %>% 
+  mutate(n = n/sum(n)) %>% 
+  ggplot(aes(x = reorder(race,n), y = n)) + 
+  geom_col() + 
+  coord_flip() + 
+  scale_y_continuous(labels = scales::percent_format()) + 
+  xlab(NULL) + ylab(NULL) + ggtitle("Race distribution")
+
+plot_grid(bp_plot, bar_plot, nrow = 1)
+
+rm(bp_plot, bar_plot, auxilary_df)
+
+```
+
+## Profession
+
+```{r target_distribution_by_profession}
+
+auxilary_df = train_set_transformed %>% 
+  group_by(profession) %>% 
+  summarise(avg = mean(lnwage), .groups = "drop")
+
+bp_plot = train_set_transformed %>%
+  select(lnwage, profession) %>%
+  ggplot() +
+  geom_boxplot(aes(x = reorder(profession, lnwage, FUN = median), y = lnwage)) +
+  geom_point(data = auxilary_df,aes(x = profession, y = avg),
+             color = "red", shape = 18, size = 3) +
+  coord_flip() +
+  xlab(NULL) + ylab(NULL) + ggtitle("Average lnwage by profession")
+
+bar_plot = train_set_transformed %>% 
+  count(profession) %>% 
+  mutate(n = n/sum(n)) %>% 
+  ggplot(aes(x = reorder(profession,n), y = n)) + 
+  geom_col() + 
+  coord_flip() + 
+  scale_y_continuous(labels = scales::percent_format()) + 
+  xlab(NULL) + ylab(NULL) + ggtitle("Profession distribution")
+
+plot_grid(bp_plot, bar_plot, nrow = 1)
+
+rm(bp_plot, bar_plot, auxilary_df)
+
+```
+
+# Interactions
+
+## Interaction between education and race
+
+```{r check_for_race_edyrs_interaction}
+
+train_set_transformed %>%
+  ggplot(aes(x = edyrs, y = lnwage, color = race)) + 
+  geom_smooth(method = "lm", se = FALSE)
+
+```
+
+
+## Interaction between education and area
+
+```{r check_for_area_edyrs_interaction}
+
+train_set_transformed %>% 
+  ggplot(aes(x = edyrs, y = lnwage, color = area)) + 
+  geom_smooth(method = "lm", se = FALSE)
+
+```
+
+
+## Interaction between sex and race
+
+```{r check_for_sex_race_interaction}
+
+train_set_transformed %>% 
+  group_by(race, sex) %>% 
+  summarise(avg = mean(lnwage), .groups = "drop") %>% 
+  ggplot(aes(x = race, y = sex)) + 
+  geom_point(aes(size = avg, color = avg)) + 
+  scale_color_viridis_c(direction = -1) + 
+  theme(legend.position = "none") + 
+  xlab(NULL) + ylab(NULL)
+
+```
+
+## Preprocessing
+
+\begin{itemize}
+  \item{Handle outliers}
+  \item{Calculate total (part + full) experience}
+  \item{Calculate part time share}
+  \item{Dummy encoding (advdeg,colldeg)}
+  \item{Target encoding (profession,race,sex, area, msa)}
+  \item{Interaction between sex and race}
+  \item{Interaction between education and race}
+\end{itemize}
+
+## Preprocessing
+
+\fontsize{8pt}{7.2}\selectfont
+
+```{r, echo=TRUE, eval=FALSE}
+
+preprocess_recipe = recipe(lnwage ~ ., train_set_transformed) %>% 
+  update_role(ID,new_role = "id variable") %>% # 
+  step_rm(ends_with("sq"))%>% # Drop squared features
+  step_YeoJohnson(all_numeric(),-ID,-lnwage) %>% # Transform numeric outliers
+  step_mutate(total_exp = expp + expf + 0.01) %>% # Sum all experience
+  step_mutate(exp_sq = total_exp ^ 2) %>% # Calculate squared experience
+  step_mutate(part_time_share = expp / (total_exp)) %>% # Calculate part time share
+  step_rm(c(expp,expf)) %>% # Drop unnecessary features
+  step_dummy(c(advdeg,colldeg)) %>% # Dummy encode 
+  step_lencode_glm(c(profession,race,sex, area, msa),outcome = vars(lnwage)) %>% # Target encode
+  step_interact(~sex:race) %>% # Interaction between sex and race
+  step_interact(~edyrs:race) %>% # Interaction between education and race
+  step_normalize(all_numeric(), -all_outcomes()) # Scale and center all numeric features
+
+
+train_set_processed = preprocess_recipe %>% 
+  prep() %>% 
+  bake(train_set)
+
+
+```
+
+# After transformations
+
+
+## Outliers
+
+```{r outliers_after_preprocessing}
+
+train_set_baked %>% 
+  select(where(~ is.numeric(.x) && length(unique(.x)) > 2),-ID) %>% 
+  pivot_longer(everything()) %>% 
+  ggplot(aes(y = value)) + 
+  geom_boxplot() + 
+  facet_wrap(~name, scales = "free") + 
+  xlab(NULL) + ylab(NULL)
+
+```
+
+
+## Features scatterplot vs target
+
+```{r scatterplot_of_numeric_features_after_preprocessing}
+
+train_set_baked %>% 
+  select(where(~ is.numeric(.x) && length(unique(.x)) > 2), lnwage,-ID) %>% 
+  pivot_longer(-lnwage) %>% 
+  ggplot(aes(x = value, y = lnwage)) + 
+  geom_point() + 
+  geom_smooth(method = "glm") + 
+  facet_wrap(~name, scales = "free") + 
+  xlab(NULL) + ylab(NULL) + 
+  ggtitle("Scaterrplot of lnwage and numeric features")
+
+```
+
+
+
+## Estimation 
+
+\fontsize{8pt}{7.2}\selectfont
+
+```{r, echo=TRUE, eval=FALSE}
+
+wf = workflow() %>% 
+  add_recipe(preprocess_recipe) %>% 
+  add_model(model)
+
+wf_tune = wf %>% 
+  tune_grid(resamples = cv_folds, grid = param_grid)
+
+final_model = wf %>% 
+  finalize_workflow(select_best(wf_tune,metric = "rmse")) %>% 
+  fit(train_set)
+
+```
+
+
+
+## Lasso selected features
+
+```{r lasso_selection}
+
+knitr::include_graphics("C://Users//Home//Desktop//lasso_selection.png")
+
+```
+

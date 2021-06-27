@@ -28,6 +28,8 @@ library(tidyverse)
 
 library(tidymodels)
 
+library(embed)
+
 library(corrr)
 
 library(ggcorrplot)
@@ -64,6 +66,7 @@ professions = c(
 )
 
 
+
 ```
 
 ```{r load_data}
@@ -90,6 +93,13 @@ train_set_transformed = train_set %>%
                names_to = "area") %>%
   filter(value == 1) %>%
   select(-value) %>%
+  mutate(male = 1 - female) %>% 
+   pivot_longer(cols = c(c("male","female")),
+               names_to = "sex") %>%
+  filter(value == 1) %>%
+  select(-value) %>% 
+  mutate(across(where(is.character),as.factor)) %>% 
+  mutate(across(where(~length(unique(.)) <= 2), as.factor)) %>% 
   identity()
 
 
@@ -102,17 +112,31 @@ train_set_transformed = train_set %>%
 
 ```{r recipe_preprocessing}
 
-preprocess_recipe = recipe(lnwage ~ ., train_set_transformed)
+preprocess_recipe = recipe(lnwage ~ ., train_set_transformed) %>% 
+  update_role(ID,new_role = "id variable") %>% 
+  step_rm(ends_with("sq"))%>%
+  step_YeoJohnson(all_numeric(),-ID,-lnwage) %>% 
+  step_mutate(part_time_share = expp / (expp + expf + 0.01)) %>% 
+  step_mutate(exp_sq = (expp + expf) ^ 2) %>% 
+  step_lencode_glm(c(profession,race,sex, area),outcome = vars(lnwage)) %>% 
+  step_interact(~edyrs:race) %>%
+  step_interact(~sex:race)
 
+
+train_set_baked = preprocess_recipe %>% 
+  prep() %>% 
+  bake(train_set_transformed)
+  
 
 ```
+
 
 ## Outliers
 
 ```{r outliers}
 
 train_set_transformed %>% 
-  select(where(~ is.numeric(.x) && length(unique(.x)) > 2),-ID,-lnwage) %>% 
+  select(where(~ is.numeric(.x) && length(unique(.x)) > 2),-ID) %>% 
   pivot_longer(everything()) %>% 
   ggplot(aes(y = value)) + 
   geom_boxplot() + 
@@ -125,24 +149,10 @@ For the squared features I'll try the Yeo-Johnson transformation to deal
 with skewness.
 
 
-
-```{r yeo_johnson_transformation}
-
-preprocess_recipe = preprocess_recipe %>%
-  step_BoxCox(ends_with("sq"))
-
-train_set_baked = preprocess_recipe %>% 
-  prep() %>% 
-  bake(train_set_transformed)
-
-
-
-```
-
 ```{r plot_outliers_after_transformation}
 
 train_set_baked %>% 
-  select(ends_with("sq")) %>% 
+  select(where(~ is.numeric(.x) && length(unique(.x)) > 2),-ID) %>% 
   pivot_longer(everything()) %>% 
   ggplot(aes(y = value)) + 
   geom_boxplot() + 
@@ -151,7 +161,6 @@ train_set_baked %>%
 ```
 
 ## Numeric features
-
 
 
 ```{r dist_of_numeric_features}
@@ -167,7 +176,7 @@ train_set_baked %>%
 
 ```
 
-When looking at the correlations of the numeric features with lnwage we see that education and father experience are positively correlated with lnwage (the square father experience has low correlation despite the fact that lnwage has only positive values). The strange result is the negative correlation between experience (and its square) to lnwage.
+When looking at the correlations of the numeric features with lnwage we see that education and full time experience are positively correlated with lnwage. Part time is negatively correlated.
 
 ```{r correlations_of_numeric_features}
 
@@ -184,30 +193,6 @@ train_set_baked %>%
   coord_flip() + 
   xlab(NULL) + ylab(NULL) + 
   ggtitle("Correlations of numeric features with lnwage")
-
-```
-
-Does experience and education years (after 18 years old)sum up to age? Need to think about whether add age as another feature?
-
-
-```{r age_distribution}
-
-train_set_baked %>% 
-  mutate(age = expp + edyrs + 18) %>% 
-  ggplot(aes(x = age)) + 
-  geom_histogram() + 
-  xlab(NULL) + ylab(NULL) + ggtitle("Age (expp + edyrs + 18) distribution")
-
-```
-
-```{r add_age}
-
-preprocess_recipe = preprocess_recipe %>% 
-  step_mutate(age = expp + edyrs + 18)
-
-train_set_baked = preprocess_recipe %>% 
-  prep() %>% 
-  bake(train_set_transformed)
 
 ```
 
@@ -234,7 +219,7 @@ There are many features that are the results of one hot encoding of the categori
 
 ```{r boxplot_by_target, fig.height=7}
 
-train_set_baked %>% 
+train_set_transformed %>% 
   select(where(is.factor), lnwage) %>% 
   pivot_longer(-lnwage) %>% 
   ggplot(aes(x = value, y = lnwage)) + 
@@ -285,7 +270,7 @@ In general the data looks good (computer, business and finance making more than 
 
 ```{r target_distribution_by_profession}
 
-train_set_baked %>% 
+train_set_transformed %>% 
   select(lnwage, profession) %>% 
   ggplot(aes(x = reorder(profession,lnwage,FUN = mean), y = lnwage)) + 
   geom_boxplot() + 
@@ -296,7 +281,7 @@ train_set_baked %>%
 
 ```{r profession_distribution}
 
-train_set_baked %>% 
+train_set_transformed %>% 
   count(profession) %>% 
   mutate(n = n/sum(n)) %>% 
   ggplot(aes(x = reorder(profession,n), y = n, fill = (n <= 0.025))) + 
@@ -306,17 +291,6 @@ train_set_baked %>%
   labs(fill = "Rare profession (less than 2.5%)") + 
   xlab(NULL) + ylab(NULL) + ggtitle("Profession distribution")
   
-
-```
-
-```{r lump_rare_profession}
-
-preprocess_recipe = preprocess_recipe %>% 
-  step_other(profession,threshold = 0.025)
-
-train_set_baked = preprocess_recipe %>% 
-  prep() %>% 
-  bake(train_set_transformed)
 
 ```
 
@@ -346,7 +320,7 @@ train_set_baked %>%
 
 ```{r target_distribution_by_race}
 
-train_set_baked %>% 
+train_set_transformed %>% 
   select(lnwage, race) %>% 
   ggplot(aes(x = reorder(race,lnwage,FUN = mean), y = lnwage)) + 
   geom_boxplot() + 
@@ -357,7 +331,7 @@ train_set_baked %>%
 
 ```{r race_distribution}
 
-train_set_baked %>% 
+train_set_transformed %>% 
   count(race) %>% 
   mutate(n = n/sum(n)) %>% 
   ggplot(aes(x = reorder(race,n), y = n,fill = (n <= 0.05))) + 
@@ -371,11 +345,12 @@ train_set_baked %>%
 ```
 
 
+
 ##Interactions
 
 ```{r check_for_race_edyrs_interaction}
 
-train_set_transformed %>%
+train_set_baked %>%
   ggplot(aes(x = edyrs, y = lnwage, color = race)) + 
   geom_smooth(method = "lm", se = FALSE)
 
@@ -385,9 +360,7 @@ There seems to be an interaction between race and education - the effect of educ
 
 ```{r add_interaction_between_edyrs_and_race}
 
-preprocess_recipe = preprocess_recipe %>% 
-  step_dummy(race) %>% 
-  step_interact(~edyrs:starts_with("race"))
+preprocess_recipe = preprocess_recipe 
 
 train_set_baked = preprocess_recipe %>% 
   prep() %>% 
@@ -408,7 +381,7 @@ Looking at an interaction between area and education gives nothing.
 
 
 # Summary
-* Reduce skewness by Yeo-Johnson (expfsq, exppsq)
+* Reduce skewness by winsorizing
 * Reverse OHE in area, race and profession
 * For profession : 
   * try (lnwage) embeddings
